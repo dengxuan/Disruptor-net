@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using static Disruptor.Constants;
 
 namespace Disruptor
 {
@@ -9,26 +10,26 @@ namespace Disruptor
     ///
     /// <see cref="RingBuffer{T}"/> and <see cref="ValueRingBuffer{T}"/>.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 148)]
+    [StructLayout(LayoutKind.Explicit, Size = DefaultPadding * 2 + 40)]
     public abstract class RingBuffer : ICursored
     {
-        protected static readonly int _bufferPadRef = Util.GetRingBufferPaddingEventCount(IntPtr.Size);
+        protected static readonly int _bufferPadRef = InternalUtil.GetRingBufferPaddingEventCount(IntPtr.Size);
 
-        // padding: 56
+        // padding: DefaultPadding
 
-        [FieldOffset(56)]
+        [FieldOffset(DefaultPadding)]
         protected object _entries;
 
-        [FieldOffset(64)]
+        [FieldOffset(DefaultPadding + 8)]
         protected long _indexMask;
 
-        [FieldOffset(72)]
+        [FieldOffset(DefaultPadding + 16)]
         protected int _bufferSize;
 
-        [FieldOffset(80)]
+        [FieldOffset(DefaultPadding + 24)]
         protected SequencerDispatcher _sequencerDispatcher; // includes 7 bytes of padding
 
-        // padding: 52
+        // padding: DefaultPadding
 
         /// <summary>
         /// Construct a RingBuffer with the full option set.
@@ -325,6 +326,33 @@ namespace Disruptor
         public long GetRemainingCapacity()
         {
             return _sequencerDispatcher.Sequencer.GetRemainingCapacity();
+        }
+
+        /// <summary>
+        /// Determines if the event for a given sequence is currently available.
+        /// <para>
+        /// Note that this does not guarantee that event will still be available
+        /// on the next interaction with the RingBuffer. For example, it is not
+        /// necessarily safe to write code like this:
+        /// <code>
+        /// if (ringBuffer.IsAvailable(sequence))
+        /// {
+        ///     var e = ringBuffer[sequence];
+        ///     // ...do something with e
+        /// }
+        /// </code>
+        /// because there is a race between the reading thread and the writing thread.
+        /// </para>
+        /// <para>
+        /// This method will also return false when querying for sequences that are
+        /// behind the ring buffer's wrap point.
+        /// </para>
+        /// </summary>
+        /// <param name="sequence">The sequence to identify the entry.</param>
+        /// <returns>If the event published with the given sequence number is currently available.</returns>
+        public bool IsAvailable(long sequence)
+        {
+            return _sequencerDispatcher.Sequencer.IsAvailable(sequence);
         }
     }
 }

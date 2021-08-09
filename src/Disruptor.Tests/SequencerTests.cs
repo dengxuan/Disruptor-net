@@ -103,7 +103,7 @@ namespace Disruptor.Tests
             });
 
             waitingSignal.WaitOne(TimeSpan.FromMilliseconds(500));
-            Assert.That(_sequencer.Cursor, Is.EqualTo(expectedFullSequence));
+            Assert.That(_sequencer.ComputeHighestPublishedSequence(), Is.EqualTo(expectedFullSequence));
 
             _gatingSequence.SetValue(Sequence.InitialCursorValue + 1L);
 
@@ -271,7 +271,7 @@ namespace Disruptor.Tests
             _sequencer.Publish(sequence);
             Assert.That(_sequencer.Next(), Is.EqualTo(sequence + 1));
         }
-        
+
         [Test]
         public void ShouldNotAllowBulkNextLessThanZero()
         {
@@ -318,6 +318,31 @@ namespace Disruptor.Tests
         public void ShouldNotAllowBulkTryNextGreaterThanRingBufferSize()
         {
             Assert.Throws<ArgumentException>(() => _sequencer.TryNext(_bufferSize + 1, out _));
+        }
+
+        [Test]
+        public void SequencesBecomeAvailableAfterAPublish()
+        {
+            var seq = _sequencer.Next();
+            Assert.IsFalse(_sequencer.IsAvailable(seq));
+            _sequencer.Publish(seq);
+
+            Assert.IsTrue(_sequencer.IsAvailable(seq));
+        }
+
+        [Test]
+        public void SequencesBecomeUnavailableAfterWrapping()
+        {
+            var seq = _sequencer.Next();
+            _sequencer.Publish(seq);
+            Assert.IsTrue(_sequencer.IsAvailable(seq));
+
+            for (var i = 0; i < _bufferSize; i++)
+            {
+                _sequencer.Publish(_sequencer.Next());
+            }
+
+            Assert.IsFalse(_sequencer.IsAvailable(seq));
         }
     }
 }

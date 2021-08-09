@@ -13,7 +13,7 @@ namespace Disruptor
     /// to <see cref="ISequenced.Next()"/>, to determine the highest available sequence that can be read, then
     /// <see cref="GetHighestPublishedSequence"/> should be used.
     /// </summary>
-    public class MultiProducerSequencer : ISequencer
+    public unsafe class MultiProducerSequencer : ISequencer
     {
         private readonly int _bufferSize;
         private readonly IWaitStrategy _waitStrategy;
@@ -24,10 +24,10 @@ namespace Disruptor
         private ISequence[] _gatingSequences = new ISequence[0];
 
         private readonly Sequence _gatingSequenceCache = new Sequence();
-
-        // availableBuffer tracks the state of each ringbuffer slot
-        // see below for more details on the approach
         private readonly int[] _availableBuffer;
+#if NETCOREAPP
+        private readonly int* _availableBufferPointer;
+#endif
         private readonly int _indexMask;
         private readonly int _indexShift;
 
@@ -50,9 +50,14 @@ namespace Disruptor
             _bufferSize = bufferSize;
             _waitStrategy = waitStrategy;
             _isBlockingWaitStrategy = !(waitStrategy is INonBlockingWaitStrategy);
+#if NETCOREAPP
+            _availableBuffer = GC.AllocateArray<int>(bufferSize, pinned: true);
+            _availableBufferPointer = (int*)Unsafe.AsPointer(ref _availableBuffer[0]);
+#else
             _availableBuffer = new int[bufferSize];
+#endif
             _indexMask = bufferSize - 1;
-            _indexShift = Util.Log2(bufferSize);
+            _indexShift = DisruptorUtil.Log2(bufferSize);
 
             InitialiseAvailableBuffer();
         }
@@ -81,17 +86,17 @@ namespace Disruptor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool HasAvailableCapacity(int requiredCapacity)
         {
-            return HasAvailableCapacity(Volatile.Read(ref _gatingSequences), requiredCapacity, _cursor.Value);
+            return HasAvailableCapacity(requiredCapacity, _cursor.Value);
         }
 
-        private bool HasAvailableCapacity(ISequence[] gatingSequences, int requiredCapacity, long cursorValue)
+        private bool HasAvailableCapacity(int requiredCapacity, long cursorValue)
         {
             var wrapPoint = (cursorValue + requiredCapacity) - _bufferSize;
             var cachedGatingSequence = _gatingSequenceCache.Value;
 
             if (wrapPoint > cachedGatingSequence || cachedGatingSequence > cursorValue)
             {
-                long minSequence = Util.GetMinimumSequence(gatingSequences, cursorValue);
+                var minSequence = DisruptorUtil.GetMinimumSequence(Volatile.Read(ref _gatingSequences), cursorValue);
                 _gatingSequenceCache.SetValue(minSequence);
 
                 if (wrapPoint > minSequence)
@@ -127,7 +132,7 @@ namespace Disruptor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public long Next(int n)
         {
-            if (n < 1 || n > _bufferSize)
+            if ((uint)(n - 1) >= _bufferSize)
             {
                 ThrowHelper.ThrowArgMustBeGreaterThanZeroAndLessThanBufferSize();
             }
@@ -135,39 +140,28 @@ namespace Disruptor
             return NextInternal(n);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal long NextInternal(int n)
         {
-            long current;
-            long next;
+            var nextSequence = _cursor.AddAndGet(n);
+            var current = nextSequence - n;
+            var wrapPoint = nextSequence - _bufferSize;
+            var cachedGatingSequence = _gatingSequenceCache.Value;
 
-            var spinWait = default(AggressiveSpinWait);
-            do
+            if (wrapPoint > cachedGatingSequence || cachedGatingSequence > current)
             {
-                current = _cursor.Value;
-                next = current + n;
+                var spinWait = default(AggressiveSpinWait);
+                long gatingSequence;
 
-                long wrapPoint = next - _bufferSize;
-                long cachedGatingSequence = _gatingSequenceCache.Value;
-
-                if (wrapPoint > cachedGatingSequence || cachedGatingSequence > current)
+                while (wrapPoint > (gatingSequence = DisruptorUtil.GetMinimumSequence(Volatile.Read(ref _gatingSequences), current)))
                 {
-                    long gatingSequence = Util.GetMinimumSequence(Volatile.Read(ref _gatingSequences), current);
-
-                    if (wrapPoint > gatingSequence)
-                    {
-                        spinWait.SpinOnce();
-                        continue;
-                    }
-
-                    _gatingSequenceCache.SetValue(gatingSequence);
+                    spinWait.SpinOnce();
                 }
-                else if (_cursor.CompareAndSet(current, next))
-                {
-                    break;
-                }
-            } while (true);
 
-            return next;
+                _gatingSequenceCache.SetValue(gatingSequence);
+            }
+
+            return nextSequence;
         }
 
         /// <summary>
@@ -203,12 +197,13 @@ namespace Disruptor
                 current = _cursor.Value;
                 next = current + n;
 
-                if (!HasAvailableCapacity(Volatile.Read(ref _gatingSequences), n, current))
+                if (!HasAvailableCapacity(n, current))
                 {
-                    sequence = default(long);
+                    sequence = default;
                     return false;
                 }
-            } while (!_cursor.CompareAndSet(current, next));
+            }
+            while (!_cursor.CompareAndSet(current, next));
 
             sequence = next;
             return true;
@@ -220,19 +215,23 @@ namespace Disruptor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public long GetRemainingCapacity()
         {
-            var consumed = Util.GetMinimumSequence(Volatile.Read(ref _gatingSequences), _cursor.Value);
+            var consumed = DisruptorUtil.GetMinimumSequence(Volatile.Read(ref _gatingSequences), _cursor.Value);
             var produced = _cursor.Value;
             return BufferSize - (produced - consumed);
         }
 
         private void InitialiseAvailableBuffer()
         {
+#if NETCOREAPP
+            _availableBuffer.AsSpan().Fill(-1);
+#else
             for (int i = _availableBuffer.Length - 1; i != 0; i--)
             {
                 SetAvailableBufferValue(i, -1);
             }
 
             SetAvailableBufferValue(0, -1);
+#endif
         }
 
         /// <summary>
@@ -254,7 +253,7 @@ namespace Disruptor
         /// </summary>
         public void Publish(long lo, long hi)
         {
-            for (long l = lo; l <= hi; l++)
+            for (var l = lo; l <= hi; l++)
             {
                 SetAvailableBufferValue(CalculateIndex(l), CalculateAvailabilityFlag(l));
             }
@@ -268,7 +267,11 @@ namespace Disruptor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void SetAvailableBufferValue(int index, int flag)
         {
+#if NETCOREAPP
+            _availableBufferPointer[index] = flag;
+#else
             _availableBuffer[index] = flag;
+#endif
         }
 
         /// <summary>
@@ -277,10 +280,14 @@ namespace Disruptor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool IsAvailable(long sequence)
         {
-            int index = CalculateIndex(sequence);
-            int flag = CalculateAvailabilityFlag(sequence);
+            var index = CalculateIndex(sequence);
+            var flag = CalculateAvailabilityFlag(sequence);
 
+#if NETCOREAPP
+            return Volatile.Read(ref _availableBufferPointer[index]) == flag;
+#else
             return Volatile.Read(ref _availableBuffer[index]) == flag;
+#endif
         }
 
         /// <summary>
@@ -288,7 +295,7 @@ namespace Disruptor
         /// </summary>
         public long GetHighestPublishedSequence(long lowerBound, long availableSequence)
         {
-            for (long sequence = lowerBound; sequence <= availableSequence; sequence++)
+            for (var sequence = lowerBound; sequence <= availableSequence; sequence++)
             {
                 if (!IsAvailable(sequence))
                 {
@@ -308,7 +315,7 @@ namespace Disruptor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int CalculateIndex(long sequence)
         {
-            return ((int)sequence) & _indexMask;
+            return (int)sequence & _indexMask;
         }
 
         /// <summary>
@@ -332,7 +339,7 @@ namespace Disruptor
         /// </summary>
         public long GetMinimumSequence()
         {
-            return Util.GetMinimumSequence(Volatile.Read(ref _gatingSequences), _cursor.Value);
+            return DisruptorUtil.GetMinimumSequence(Volatile.Read(ref _gatingSequences), _cursor.Value);
         }
 
         /// <summary>

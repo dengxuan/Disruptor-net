@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 using Disruptor.Dsl;
 using Disruptor.Tests.Dsl.Stubs;
 using Disruptor.Tests.Support;
@@ -13,7 +15,7 @@ namespace Disruptor.Tests.Dsl
     {
         private const int _timeoutInSeconds = 2;
         private ValueDisruptor<TestValueEvent> _disruptor;
-        private StubExecutor _executor;
+        private StubTaskScheduler _taskScheduler;
         private List<DelayedEventHandler> _delayedEventHandlers;
         private ValueRingBuffer<TestValueEvent> _ringBuffer;
 
@@ -22,8 +24,8 @@ namespace Disruptor.Tests.Dsl
         {
             _ringBuffer = null;
             _delayedEventHandlers = new List<DelayedEventHandler>();
-            _executor = new StubExecutor();
-            _disruptor = new ValueDisruptor<TestValueEvent>(() => new TestValueEvent(), 4, _executor);
+            _taskScheduler = new StubTaskScheduler();
+            _disruptor = new ValueDisruptor<TestValueEvent>(() => new TestValueEvent(), 4, _taskScheduler);
         }
 
         [TearDown]
@@ -35,7 +37,17 @@ namespace Disruptor.Tests.Dsl
             }
 
             _disruptor.Halt();
-            _executor.JoinAllThreads();
+            _taskScheduler.JoinAllThreads();
+        }
+
+        [Test]
+        public void ShouldHaveStartedAfterStartCalled()
+        {
+            Assert.IsFalse(_disruptor.HasStarted, "Should only be set to started after start is called");
+
+            _disruptor.Start();
+
+            Assert.IsTrue(_disruptor.HasStarted, "Should be set to started after start is called");
         }
 
         [Test]
@@ -155,7 +167,7 @@ namespace Disruptor.Tests.Dsl
         [Test]
         public void ShouldCreateEventProcessorGroupForFirstEventProcessors()
         {
-            _executor.IgnoreExecutions();
+            _taskScheduler.IgnoreExecutions();
             var eventHandler1 = new SleepingEventHandler();
             var eventHandler2 = new SleepingEventHandler();
 
@@ -164,7 +176,7 @@ namespace Disruptor.Tests.Dsl
             _disruptor.Start();
 
             Assert.IsNotNull(eventHandlerGroup);
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(2));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(2));
         }
 
         [Test]
@@ -205,7 +217,7 @@ namespace Disruptor.Tests.Dsl
 
             _disruptor.Start();
 
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(2));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(2));
         }
 
         [Test]
@@ -222,7 +234,7 @@ namespace Disruptor.Tests.Dsl
 
             EnsureTwoEventsProcessedAccordingToDependencies(countDownLatch, handler1, handler2);
 
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(3));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(3));
         }
 
         [Test]
@@ -240,7 +252,7 @@ namespace Disruptor.Tests.Dsl
 
             EnsureTwoEventsProcessedAccordingToDependencies(countDownLatch, handler1, handler2);
 
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(3));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(3));
         }
 
         [Test]
@@ -307,9 +319,9 @@ namespace Disruptor.Tests.Dsl
             var stubPublisher = new StubPublisher(ringBuffer);
             try
             {
-                _executor.Execute(() => stubPublisher.Run());
+                stubPublisher.Start();
 
-                AssertProducerReaches(stubPublisher, 4, true);
+                stubPublisher.AssertProducerReaches(4, true);
 
                 delayedEventHandler.ProcessEvent();
                 delayedEventHandler.ProcessEvent();
@@ -317,7 +329,7 @@ namespace Disruptor.Tests.Dsl
                 delayedEventHandler.ProcessEvent();
                 delayedEventHandler.ProcessEvent();
 
-                AssertProducerReaches(stubPublisher, 5, false);
+                stubPublisher.AssertProducerReaches(5, false);
             }
             finally
             {
@@ -344,7 +356,7 @@ namespace Disruptor.Tests.Dsl
         [Test]
         public void ShouldThrowExceptionWhenAddingEventProcessorsAfterTheProducerBarrierHasBeenCreated()
         {
-            _executor.IgnoreExecutions();
+            _taskScheduler.IgnoreExecutions();
             _disruptor.HandleEventsWith(new SleepingEventHandler());
             _disruptor.Start();
 
@@ -354,7 +366,7 @@ namespace Disruptor.Tests.Dsl
         [Test]
         public void ShouldThrowExceptionIfStartIsCalledTwice()
         {
-            _executor.IgnoreExecutions();
+            _taskScheduler.IgnoreExecutions();
             _disruptor.HandleEventsWith(new SleepingEventHandler());
             _disruptor.Start();
 
@@ -376,7 +388,7 @@ namespace Disruptor.Tests.Dsl
 
             EnsureTwoEventsProcessedAccordingToDependencies(countDownLatch, delayedEventHandler);
 
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(2));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(2));
         }
 
         [Test]
@@ -395,7 +407,7 @@ namespace Disruptor.Tests.Dsl
 
             EnsureTwoEventsProcessedAccordingToDependencies(countDownLatch, delayedEventHandler);
 
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(2));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(2));
         }
 
         [Test]
@@ -435,7 +447,7 @@ namespace Disruptor.Tests.Dsl
 
             EnsureTwoEventsProcessedAccordingToDependencies(countDownLatch, delayedEventHandler1, delayedEventHandler2);
 
-            Assert.That(_executor.GetExecutionCount(), Is.EqualTo(3));
+            Assert.That(_taskScheduler.TaskCount, Is.EqualTo(3));
         }
 
         [Test]
@@ -538,25 +550,6 @@ namespace Disruptor.Tests.Dsl
             }
 
             AssertThatCountDownLatchIsZero(countDownLatch);
-        }
-
-        private static void AssertProducerReaches(StubPublisher stubPublisher, int expectedPublicationCount, bool strict)
-        {
-            var loopStart = DateTime.UtcNow;
-            while (stubPublisher.GetPublicationCount() < expectedPublicationCount && DateTime.UtcNow - loopStart < TimeSpan.FromMilliseconds(5))
-            {
-                Thread.Yield();
-            }
-
-            if (strict)
-            {
-                Assert.That(stubPublisher.GetPublicationCount(), Is.EqualTo(expectedPublicationCount));
-            }
-            else
-            {
-                var actualPublicationCount = stubPublisher.GetPublicationCount();
-                Assert.IsTrue(actualPublicationCount >= expectedPublicationCount, "Producer reached unexpected count. Expected at least " + expectedPublicationCount + " but only reached " + actualPublicationCount);
-            }
         }
 
         private void PublishEvent()

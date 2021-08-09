@@ -139,7 +139,7 @@ namespace Disruptor
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
-                return Util.Read<T>(_entries, _bufferPadRef + (int)(sequence & _indexMask));
+                return InternalUtil.Read<T>(_entries, _bufferPadRef + (int)(sequence & _indexMask));
             }
         }
 
@@ -159,19 +159,6 @@ namespace Disruptor
         public override string ToString()
         {
             return $"RingBuffer {{Type={typeof(T).Name}, BufferSize={_bufferSize}, Sequencer={_sequencerDispatcher.Sequencer.GetType().Name}}}";
-        }
-
-        /// <summary>
-        /// Determines if a particular entry is available.  Note that using this when not within a context that is
-        /// maintaining a sequence barrier, it is likely that using this to determine if you can read a value is likely
-        /// to result in a race condition and broken code.
-        /// </summary>
-        /// <param name="sequence">The sequence to identify the entry.</param>
-        /// <returns><c>true</c> if the value can be read, <c>false</c> otherwise.</returns>
-        [Obsolete("Please don't use this method. It probably won't do what you think that it does.")]
-        public bool IsPublished(long sequence)
-        {
-            return _sequencerDispatcher.Sequencer.IsAvailable(sequence);
         }
 
         /// <summary>

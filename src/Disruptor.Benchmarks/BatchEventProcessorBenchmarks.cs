@@ -1,35 +1,45 @@
 ﻿using System;
-using System.Runtime.CompilerServices;
 using BenchmarkDotNet.Attributes;
-using Disruptor.Internal;
+using Disruptor.Benchmarks.Reference;
 
 namespace Disruptor.Benchmarks
 {
     public class BatchEventProcessorBenchmarks
     {
-        private readonly IRunner _runner;
+        private const int _ringBufferSize = 131072;
+
+        private readonly RingBuffer<XEvent> _ringBuffer;
+        private IBatchEventProcessor<XEvent> _processor;
+        private IBatchEventProcessor<XEvent> _processorRef;
 
         public BatchEventProcessorBenchmarks()
         {
-            var ringBuffer = new RingBuffer<XEvent>(() => new XEvent(), new SingleProducerSequencer(4096, new SpinWaitWaitStrategy()));
-            var eventHandler = new XEventHandler();
-            var sequenceBarrier = ringBuffer.NewBarrier();
+            _ringBuffer = new RingBuffer<XEvent>(() => new XEvent(), new SingleProducerSequencer(_ringBufferSize, new BusySpinWaitStrategy()));
 
-            ringBuffer.PublishEvent().Dispose();
-
-            var dataProviderProxy = StructProxy.CreateProxyInstance<IDataProvider<XEvent>>(ringBuffer);
-            var sequenceBarrierProxy = StructProxy.CreateProxyInstance(sequenceBarrier);
-            var eventHandlerProxy = StructProxy.CreateProxyInstance<IEventHandler<XEvent>>(eventHandler);
-            var batchStartAwareProxy = new NoopBatchStartAware();
-
-            var runnerType = typeof(Runner<,,,,>).MakeGenericType(typeof(XEvent), dataProviderProxy.GetType(), sequenceBarrierProxy.GetType(), eventHandlerProxy.GetType(), batchStartAwareProxy.GetType());
-            _runner = (IRunner)Activator.CreateInstance(runnerType, dataProviderProxy, sequenceBarrierProxy, eventHandlerProxy, batchStartAwareProxy);
+            for (var i = 0; i < _ringBufferSize; i++)
+            {
+                using var scope = _ringBuffer.PublishEvent();
+                scope.Event().Data = i;
+            }
         }
 
-        [Benchmark]
-        public long ProcessEvent()
+        [IterationSetup]
+        public void Setup()
         {
-            return _runner.ProcessEvent();
+            _processor = BatchEventProcessorFactory.Create(_ringBuffer, _ringBuffer.NewBarrier(), new XEventHandler(() => _processor.Halt()));
+            _processorRef = BatchEventProcessorFactory.Create(_ringBuffer, _ringBuffer.NewBarrier(), new XEventHandler(() => _processorRef.Halt()), typeof(BatchEventProcessorRef<,,,,>));
+        }
+
+        [Benchmark(OperationsPerInvoke = _ringBufferSize)]
+        public void Run()
+        {
+            _processor.Run();
+        }
+
+        [Benchmark(OperationsPerInvoke = _ringBufferSize)]
+        public void RunRef()
+        {
+            _processorRef.Run();
         }
 
         public class XEvent
@@ -39,92 +49,17 @@ namespace Disruptor.Benchmarks
 
         public class XEventHandler : IEventHandler<XEvent>
         {
-            public long Sum;
+            private readonly Action _shutdown;
+
+            public XEventHandler(Action shutdown)
+            {
+                _shutdown = shutdown;
+            }
 
             public void OnEvent(XEvent data, long sequence, bool endOfBatch)
             {
-                Sum += data.Data;
-            }
-        }
-
-        private struct NoopBatchStartAware : IBatchStartAware
-        {
-            public void OnBatchStart(long batchSize)
-            {
-            }
-        }
-
-        public interface IRunner
-        {
-            long ProcessEvent();
-        }
-
-        public class Runner<T, TDataProvider, TSequenceBarrier, TEventHandler, TBatchStartAware> : IRunner
-            where T : class
-            where TDataProvider : IDataProvider<T>
-            where TSequenceBarrier : ISequenceBarrier
-            where TEventHandler : IEventHandler<T>
-            where TBatchStartAware : IBatchStartAware
-        {
-            private readonly Sequence _sequence = new Sequence();
-            private IExceptionHandler<T> _exceptionHandler = new FatalExceptionHandler();
-
-            private TDataProvider _dataProvider;
-            private TSequenceBarrier _sequenceBarrier;
-            private TEventHandler _eventHandler;
-            private TBatchStartAware _batchStartAware;
-
-            public volatile int Running;
-
-            public Runner(TDataProvider dataProvider, TSequenceBarrier sequenceBarrier, TEventHandler eventHandler, TBatchStartAware batchStartAware)
-            {
-                _dataProvider = dataProvider;
-                _sequenceBarrier = sequenceBarrier;
-                _eventHandler = eventHandler;
-                _batchStartAware = batchStartAware;
-            }
-
-            public long ProcessEvent()
-            {
-                T evt = null;
-                var nextSequence = _sequence.Value + 1L;
-
-                try
-                {
-                    var availableSequence = _sequenceBarrier.WaitFor(nextSequence);
-
-                    _batchStartAware.OnBatchStart(availableSequence - nextSequence + 1);
-
-                    while (nextSequence <= availableSequence)
-                    {
-                        evt = _dataProvider[nextSequence];
-                        _eventHandler.OnEvent(evt, nextSequence, nextSequence == availableSequence);
-                        nextSequence++;
-                    }
-
-                    //_sequence.SetValue(availableSequence);
-                }
-                catch (TimeoutException)
-                {
-                    NotifyTimeout(_sequence.Value);
-                }
-                catch (AlertException)
-                {
-                }
-                catch (Exception ex)
-                {
-                    _exceptionHandler.HandleEventException(ex, nextSequence, evt);
-                    _sequence.SetValue(nextSequence);
-                    nextSequence++;
-                }
-
-                return nextSequence;
-            }
-
-            [MethodImpl(MethodImplOptions.NoInlining)]
-            private void NotifyTimeout(long sequence)
-            {
-                Console.WriteLine(sequence);
+                if (sequence == _ringBufferSize - 1)
+                    _shutdown.Invoke();
             }
         }
     }
