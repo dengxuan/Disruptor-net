@@ -1,38 +1,24 @@
 ﻿using System.Threading;
 
-namespace Disruptor
+namespace Disruptor;
+
+/// <summary>
+/// Non-blocking wait strategy that uses a <see cref="SpinWait"/>.
+/// </summary>
+/// <remarks>
+/// This strategy is a good compromise between performance and CPU resources.
+/// Latency spikes can occur after quiet periods.
+/// </remarks>
+public sealed class SpinWaitWaitStrategy : IWaitStrategy
 {
-    /// <summary>
-    /// Spin strategy that uses a <see cref="SpinWait"/> for <see cref="IEventProcessor"/>s waiting on a barrier.
-    /// <p>
-    /// This strategy is a good compromise between performance and CPU resource.
-    /// Latency spikes can occur after quiet periods.
-    /// </p>
-    /// </summary>
-    public sealed class SpinWaitWaitStrategy : INonBlockingWaitStrategy
+    public bool IsBlockingStrategy => false;
+
+    public SequenceWaitResult WaitFor(long sequence, DependentSequenceGroup dependentSequences, CancellationToken cancellationToken)
     {
-        /// <summary>
-        /// <see cref="IWaitStrategy.WaitFor"/>
-        /// </summary>
-        public long WaitFor(long sequence, Sequence cursor, ISequence dependentSequence, ISequenceBarrier barrier)
-        {
-            long availableSequence;
+        return dependentSequences.SpinWaitFor(sequence, cancellationToken);
+    }
 
-            var spinWait = new SpinWait();
-            while ((availableSequence = dependentSequence.Value) < sequence)
-            {
-                barrier.CheckAlert();
-                spinWait.SpinOnce();
-            }
-
-            return availableSequence;
-        }
-
-        /// <summary>
-        /// <see cref="IWaitStrategy.SignalAllWhenBlocking"/>
-        /// </summary>
-        public void SignalAllWhenBlocking()
-        {
-        }
+    public void SignalAllWhenBlocking()
+    {
     }
 }

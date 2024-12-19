@@ -1,156 +1,167 @@
-﻿using Disruptor.Tests.Support;
+﻿using System;
+using Disruptor.Processing;
+using Disruptor.Tests.Support;
 using NUnit.Framework;
 
-namespace Disruptor.Tests
+namespace Disruptor.Tests;
+
+[TestFixture]
+public class RingBufferWithAssertingStubTest
 {
-    [TestFixture]
-    public class RingBufferWithAssertingStubTest
+    private readonly RingBuffer<StubEvent> _ringBuffer;
+
+    public RingBufferWithAssertingStubTest()
     {
-        private RingBuffer<StubEvent> _ringBuffer;
-        private ISequencer _sequencer;
+        var sequencer = new AssertingSequencer(16);
+        _ringBuffer = new RingBuffer<StubEvent>(StubEvent.EventFactory, sequencer);
+    }
 
-        [SetUp]
-        public void SetUp()
+
+    [Test]
+    public void ShouldDelegateNextAndPublish()
+    {
+        _ringBuffer.Publish(_ringBuffer.Next());
+    }
+
+    [Test]
+    public void ShouldDelegateTryNextOutAndPublish()
+    {
+        Assert.That(_ringBuffer.TryNext(out var sequence), Is.True);
+        _ringBuffer.Publish(sequence);
+    }
+
+    [Test]
+    public void ShouldDelegateNextNAndPublish()
+    {
+        long hi = _ringBuffer.Next(10);
+        _ringBuffer.Publish(hi - 9, hi);
+    }
+
+    [Test]
+    public void ShouldDelegateTryNextNAndPublish()
+    {
+        _ringBuffer.TryNext(10, out var hi);
+        _ringBuffer.Publish(hi - 9, hi);
+    }
+
+    [Test]
+    public void ShouldDelegateTryNextNOutAndPublish()
+    {
+        Assert.That(_ringBuffer.TryNext(10, out var hi), Is.True);
+        _ringBuffer.Publish(hi - 9, hi);
+    }
+
+    public class AssertingSequencer : ISequencer
+    {
+        private readonly int _size;
+        private long _lastBatchSize = -1;
+        private long _lastValue = -1;
+
+        public AssertingSequencer(int size)
         {
-            _sequencer = new AssertingSequencer(16);
-
-            _ringBuffer = new RingBuffer<StubEvent>(StubEvent.EventFactory, _sequencer);
+            _size = size;
         }
 
-        [Test]
-        public void ShouldDelegateNextAndPublish()
+        public int BufferSize => _size;
+
+        public bool HasAvailableCapacity(int requiredCapacity) => requiredCapacity <= _size;
+
+        public long GetRemainingCapacity() => _size;
+
+        public long Next()
         {
-            _ringBuffer.Publish(_ringBuffer.Next());
+            _lastValue = ThreadLocalRandom.Current.Next(0, 1000000);
+            _lastBatchSize = 1;
+            return _lastValue;
         }
 
-        [Test]
-        public void ShouldDelegateTryNextOutAndPublish()
+        public long Next(int n)
         {
-            Assert.That(_ringBuffer.TryNext(out var sequence), Is.True);
-            _ringBuffer.Publish(sequence);
+            _lastValue = ThreadLocalRandom.Current.Next(n, 1000000);
+            _lastBatchSize = n;
+            return _lastValue;
         }
 
-        [Test]
-        public void ShouldDelegateNextNAndPublish()
+        public bool TryNext(out long sequence)
         {
-            long hi = _ringBuffer.Next(10);
-            _ringBuffer.Publish(hi - 9, hi);
+            sequence = Next();
+            return true;
         }
 
-        [Test]
-        public void ShouldDelegateTryNextNAndPublish()
+        public bool TryNext(int n, out long sequence)
         {
-            _ringBuffer.TryNext(10, out var hi);
-            _ringBuffer.Publish(hi - 9, hi);
+            sequence = Next(n);
+            return true;
         }
 
-        [Test]
-        public void ShouldDelegateTryNextNOutAndPublish()
+        public void Publish(long sequence)
         {
-            Assert.That(_ringBuffer.TryNext(10, out var hi), Is.True);
-            _ringBuffer.Publish(hi - 9, hi);
+            Assert.That(sequence, Is.EqualTo(_lastValue));
+            Assert.That(_lastBatchSize, Is.EqualTo(1L));
         }
 
-        public class AssertingSequencer : ISequencer
+        public void Publish(long lo, long hi)
         {
-            private readonly int _size;
-            private long _lastBatchSize = -1;
-            private long _lastValue = -1;
+            Assert.That(hi, Is.EqualTo(_lastValue));
+            Assert.That((hi - lo) + 1, Is.EqualTo(_lastBatchSize));
+        }
 
-            public AssertingSequencer(int size)
-            {
-                _size = size;
-            }
+        public long Cursor => _lastValue;
 
-            public int BufferSize => _size;
+        public void Claim(long sequence)
+        {
+        }
 
-            public bool HasAvailableCapacity(int requiredCapacity) => requiredCapacity <= _size;
+        public bool IsAvailable(long sequence)
+        {
+            return false;
+        }
 
-            public long GetRemainingCapacity() => _size;
+        public void AddGatingSequences(params Sequence[] gatingSequences)
+        {
+        }
 
-            public long Next()
-            {
-                _lastValue = ThreadLocalRandom.Current.Next(0, 1000000);
-                _lastBatchSize = 1;
-                return _lastValue;
-            }
+        public bool RemoveGatingSequence(Sequence sequence)
+        {
+            return false;
+        }
 
-            public long Next(int n)
-            {
-                _lastValue = ThreadLocalRandom.Current.Next(n, 1000000);
-                _lastBatchSize = n;
-                return _lastValue;
-            }
+        public SequenceBarrier NewBarrier(params Sequence[] sequencesToTrack)
+        {
+            throw new NotSupportedException();
+        }
 
-            public bool TryNext(out long sequence)
-            {
-                sequence = Next();
-                return true;
-            }
+        public AsyncSequenceBarrier NewAsyncBarrier(params Sequence[] sequencesToTrack)
+        {
+            throw new NotSupportedException();
+        }
 
-            public bool TryNext(int n, out long sequence)
-            {
-                sequence = Next(n);
-                return true;
-            }
+        public long GetMinimumSequence()
+        {
+            return 0;
+        }
 
-            public void Publish(long sequence)
-            {
-                Assert.That(sequence, Is.EqualTo(_lastValue));
-                Assert.That(_lastBatchSize, Is.EqualTo(1L));
-            }
+        public long GetHighestPublishedSequence(long nextSequence, long availableSequence)
+        {
+            return 0;
+        }
 
-            public void Publish(long lo, long hi)
-            {
-                Assert.That(hi, Is.EqualTo(_lastValue));
-                Assert.That((hi - lo) + 1, Is.EqualTo(_lastBatchSize));
-            }
+        public EventPoller<T> NewPoller<T>(IDataProvider<T> provider, params Sequence[] gatingSequences)
+            where T : class
+        {
+            throw new NotSupportedException();
+        }
 
-            public long Cursor => _lastValue;
+        public ValueEventPoller<T> NewPoller<T>(IValueDataProvider<T> provider, params Sequence[] gatingSequences)
+            where T : struct
+        {
+            throw new NotSupportedException();
+        }
 
-            public void Claim(long sequence)
-            {
-            }
-
-            public bool IsAvailable(long sequence)
-            {
-                return false;
-            }
-
-            public void AddGatingSequences(params ISequence[] gatingSequences)
-            {
-            }
-
-            public bool RemoveGatingSequence(ISequence sequence)
-            {
-                return false;
-            }
-
-            public ISequenceBarrier NewBarrier(params ISequence[] sequencesToTrack)
-            {
-                return null;
-            }
-
-            public long GetMinimumSequence()
-            {
-                return 0;
-            }
-
-            public long GetHighestPublishedSequence(long nextSequence, long availableSequence)
-            {
-                return 0;
-            }
-
-            public EventPoller<T> NewPoller<T>(IDataProvider<T> provider, params ISequence[] gatingSequences)
-            {
-                return null;
-            }
-
-            public ValueEventPoller<T> NewPoller<T>(IValueDataProvider<T> provider, params ISequence[] gatingSequences)
-                where T : struct
-            {
-                return null;
-            }
+        public AsyncEventStream<T> NewAsyncEventStream<T>(IDataProvider<T> provider, Sequence[] gatingSequences)
+            where T : class
+        {
+            throw new NotSupportedException();
         }
     }
 }

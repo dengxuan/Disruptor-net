@@ -6,191 +6,194 @@ using Disruptor.Dsl;
 using Disruptor.Tests.Support;
 using NUnit.Framework;
 
-namespace Disruptor.Tests
+namespace Disruptor.Tests;
+
+public class UnmanagedRingBufferTests : ValueRingBufferFixture<StubUnmanagedEvent>, IDisposable
 {
-    public class UnmanagedRingBufferTests : ValueRingBufferFixture<StubUnmanagedEvent>
+    private readonly List<UnmanagedRingBufferMemory> _memoryList;
+
+    public UnmanagedRingBufferTests()
+        : this(new List<UnmanagedRingBufferMemory>())
     {
-        private List<UnmanagedRingBufferMemory> _memoryList;
+    }
 
-        public override void SetUp()
+    private UnmanagedRingBufferTests(List<UnmanagedRingBufferMemory> memoryList)
+        : base(x => CreateRingBuffer(x.size, x.producerType, memoryList))
+    {
+        _memoryList = memoryList;
+    }
+
+    public override void Dispose()
+    {
+        foreach (var memory in _memoryList)
         {
-            _memoryList = new List<UnmanagedRingBufferMemory>();
-
-            base.SetUp();
+            memory.Dispose();
         }
 
-        public override void Teardown()
-        {
-            base.Teardown();
+        base.Dispose();
+    }
 
-            foreach (var memory in _memoryList)
-            {
-                memory.Dispose();
-            }
+    private static IValueRingBuffer<StubUnmanagedEvent> CreateRingBuffer(int size, ProducerType producerType, List<UnmanagedRingBufferMemory> memoryList)
+    {
+        var memory = UnmanagedRingBufferMemory.Allocate(size, () => new StubUnmanagedEvent(-1));
+        memoryList.Add(memory);
+
+        return new UnmanagedRingBuffer<StubUnmanagedEvent>(memory, producerType, new BlockingWaitStrategy());
+    }
+
+    private UnmanagedRingBuffer<T> CreateSingleProducer<T>(Func<T> eventFactory, int size)
+        where T : unmanaged
+    {
+        var memory = UnmanagedRingBufferMemory.Allocate(size, eventFactory);
+        _memoryList.Add(memory);
+
+        return new UnmanagedRingBuffer<T>(memory, ProducerType.Single, new BlockingWaitStrategy());
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void ShouldNotCreateRingBufferWithInvalidEventSize(int eventSize)
+    {
+        using (var memory = UnmanagedRingBufferMemory.Allocate(1, 1))
+        {
+            Assert.Throws<ArgumentException>(() => GC.KeepAlive(new UnmanagedRingBuffer<StubUnmanagedEvent>(memory.PointerToFirstEvent, eventSize, new SingleProducerSequencer(1))));
+        }
+    }
+
+    [Test]
+    public void ShouldPublishEvent()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        using (var scope = ringBuffer.PublishEvent())
+        {
+            scope.Event() = scope.Sequence;
         }
 
-        protected override IValueRingBuffer<StubUnmanagedEvent> CreateRingBuffer(int size, ProducerType producerType)
+        using (var scope = ringBuffer.TryPublishEvent())
         {
-            var memory = UnmanagedRingBufferMemory.Allocate(size, () => new StubUnmanagedEvent(-1));
-            _memoryList.Add(memory);
-
-            return new UnmanagedRingBuffer<StubUnmanagedEvent>(memory, producerType, new BlockingWaitStrategy());
+            Assert.That(scope.HasEvent);
+            Assert.That(scope.TryGetEvent(out var e));
+            e.Event() = e.Sequence;
         }
 
-        private UnmanagedRingBuffer<T> CreateSingleProducer<T>(Func<T> eventFactory, int size)
-            where T : unmanaged
-        {
-            var memory = UnmanagedRingBufferMemory.Allocate(size, eventFactory);
-            _memoryList.Add(memory);
+        Assert.That(ringBuffer, IsValueRingBuffer.WithEvents(0L, 1L));
+    }
 
-            return new UnmanagedRingBuffer<T>(memory, ProducerType.Single, new BlockingWaitStrategy());
+    [Test]
+    public void ShouldPublishEvents()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        using (var scope = ringBuffer.PublishEvents(2))
+        {
+            scope.Event(0) = scope.StartSequence;
+            scope.Event(1) = scope.StartSequence + 1;
         }
 
-        [TestCase(0)]
-        [TestCase(-1)]
-        public void ShouldNotCreateRingBufferWithInvalidEventSize(int eventSize)
+        Assert.That(ringBuffer, IsValueRingBuffer.WithEvents(0L, 1L, -1, -1));
+
+        using (var scope = ringBuffer.TryPublishEvents(2))
         {
-            using (var memory = UnmanagedRingBufferMemory.Allocate(1, 1))
-            {
-                Assert.Throws<ArgumentException>(() => GC.KeepAlive(new UnmanagedRingBuffer<StubUnmanagedEvent>(memory.PointerToFirstEvent, eventSize, new SingleProducerSequencer(1))));
-            }
+            Assert.That(scope.HasEvents);
+            Assert.That(scope.TryGetEvents(out var e));
+            e.Event(0) = e.StartSequence;
+            e.Event(1) = e.StartSequence + 1;
         }
 
-        [Test]
-        public void ShouldPublishEvent()
+        Assert.That(ringBuffer, IsValueRingBuffer.WithEvents(0L, 1L, 2L, 3L));
+    }
+
+    [Test]
+    public void ShouldNotPublishEventsIfBatchIsLargerThanRingBuffer()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            using (var scope = ringBuffer.PublishEvent())
-            {
-                scope.Event() = scope.Sequence;
-            }
-
-            using (var scope = ringBuffer.TryPublishEvent())
-            {
-                Assert.IsTrue(scope.HasEvent);
-                Assert.IsTrue(scope.TryGetEvent(out var e));
-                e.Event() = e.Sequence;
-            }
-
-            Assert.That(ringBuffer, ValueRingBufferEqualsConstraint.IsValueRingBufferWithEvents(0L, 1L));
+            Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(5));
         }
-
-        [Test]
-        public void ShouldPublishEvents()
+        finally
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            using (var scope = ringBuffer.PublishEvents(2))
-            {
-                scope.Event(0) = scope.StartSequence;
-                scope.Event(1) = scope.StartSequence + 1;
-            }
-
-            Assert.That(ringBuffer, ValueRingBufferEqualsConstraint.IsValueRingBufferWithEvents(0L, 1L, -1, -1));
-
-            using (var scope = ringBuffer.TryPublishEvents(2))
-            {
-                Assert.IsTrue(scope.HasEvents);
-                Assert.IsTrue(scope.TryGetEvents(out var e));
-                e.Event(0) = e.StartSequence;
-                e.Event(1) = e.StartSequence + 1;
-            }
-
-            Assert.That(ringBuffer, ValueRingBufferEqualsConstraint.IsValueRingBufferWithEvents(0L, 1L, 2L, 3L));
+            AssertEmptyRingBuffer(ringBuffer);
         }
+    }
 
-        [Test]
-        public void ShouldNotPublishEventsIfBatchIsLargerThanRingBuffer()
+    [Test]
+    public void ShouldNotPublishEventsWhenBatchSizeIs0()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(5));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(0));
         }
-
-        [Test]
-        public void ShouldNotPublishEventsWhenBatchSizeIs0()
+        finally
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(0));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            AssertEmptyRingBuffer(ringBuffer);
         }
+    }
 
-        [Test]
-        public void ShouldNotTryPublishEventsWhenBatchSizeIs0()
+    [Test]
+    public void ShouldNotTryPublishEventsWhenBatchSizeIs0()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(0));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(0));
         }
-
-        [Test]
-        public void ShouldNotPublishEventsWhenBatchSizeIsNegative()
+        finally
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(-1));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            AssertEmptyRingBuffer(ringBuffer);
         }
+    }
 
-        [Test]
-        public void ShouldNotTryPublishEventsWhenBatchSizeIsNegative()
+    [Test]
+    public void ShouldNotPublishEventsWhenBatchSizeIsNegative()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var ringBuffer = CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(-1));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(-1));
         }
-
-        [TestCase(0)]
-        [TestCase(1)]
-        [TestCase(31)]
-        [TestCase(32)]
-        [TestCase(int.MaxValue)]
-        [TestCase(int.MaxValue +1L)]
-        public void ShouldGetEventFromSequence(long sequence)
+        finally
         {
-            var index = 0;
-            using var memory = UnmanagedRingBufferMemory.Allocate(32, () => new StubUnmanagedEvent(index++));
-            var ringBuffer = new UnmanagedRingBuffer<StubUnmanagedEvent>(memory, ProducerType.Single, new BlockingWaitStrategy());
-
-            ref var evt = ref ringBuffer[sequence];
-
-            var expectedIndex = sequence % 32;
-            Assert.That(evt.Value, Is.EqualTo(expectedIndex));
+            AssertEmptyRingBuffer(ringBuffer);
         }
+    }
+
+    [Test]
+    public void ShouldNotTryPublishEventsWhenBatchSizeIsNegative()
+    {
+        var ringBuffer = CreateSingleProducer(() => -1L, 4);
+
+        try
+        {
+            Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(-1));
+        }
+        finally
+        {
+            AssertEmptyRingBuffer(ringBuffer);
+        }
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(31)]
+    [TestCase(32)]
+    [TestCase(int.MaxValue)]
+    [TestCase(int.MaxValue +1L)]
+    public void ShouldGetEventFromSequence(long sequence)
+    {
+        var index = 0;
+        using var memory = UnmanagedRingBufferMemory.Allocate(32, () => new StubUnmanagedEvent(index++));
+        var ringBuffer = new UnmanagedRingBuffer<StubUnmanagedEvent>(memory, ProducerType.Single, new BlockingWaitStrategy());
+
+        ref var evt = ref ringBuffer[sequence];
+
+        var expectedIndex = sequence % 32;
+        Assert.That(evt.Value, Is.EqualTo(expectedIndex));
     }
 }

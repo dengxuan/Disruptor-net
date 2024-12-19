@@ -1,15 +1,9 @@
-﻿using NUnit.Framework;
-using static Disruptor.Tests.Support.WaitStrategyTestUtil;
+﻿namespace Disruptor.Tests;
 
-namespace Disruptor.Tests
+public class YieldingWaitStrategyTests : WaitStrategyFixture<YieldingWaitStrategy>
 {
-    [TestFixture]
-    public class YieldingWaitStrategyTests
+    protected override YieldingWaitStrategy CreateWaitStrategy()
     {
-        [Test]
-        public void ShouldWaitForValue()
-        {
-            AssertWaitForWithDelayOf(50, new YieldingWaitStrategy());
-        }
+        return new YieldingWaitStrategy();
     }
 }

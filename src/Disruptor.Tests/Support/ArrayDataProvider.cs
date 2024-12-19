@@ -1,19 +1,45 @@
-namespace Disruptor.Tests.Support
+using System;
+
+namespace Disruptor.Tests.Support;
+
+public class ArrayDataProvider<T> : IDataProvider<T>
+    where T : class
 {
-    public class ArrayDataProvider<T> : IDataProvider<T>, IValueDataProvider<T>
+    public T[] Data { get; }
+
+    public ArrayDataProvider(int capacity) : this(new T[capacity])
     {
-        public T[] Data { get; }
+    }
 
-        public ArrayDataProvider(T[] data)
+    public ArrayDataProvider(T[] data)
+    {
+        Data = data;
+    }
+
+    public T this[long sequence] => Data[sequence % Data.Length];
+
+    public ReadOnlySpan<T> this[long lo, long hi]
+    {
+        get
         {
-            Data = data;
+            var index1 = (int)(lo % Data.Length);
+            var index2 = (int)(hi % Data.Length);
+
+            if (index1 <= index2)
+                return new ReadOnlySpan<T>(Data, index1, index2 - index1 + 1);
+
+            return new ReadOnlySpan<T>(Data, index1, Data.Length - index1);
         }
+    }
 
-        T IDataProvider<T>.this[long sequence] => Data[sequence];
+    public EventBatch<T> GetBatch(long lo, long hi)
+    {
+        var index1 = (int)(lo % Data.Length);
+        var index2 = (int)(hi % Data.Length);
 
-        ref T IValueDataProvider<T>.this[long sequence] => ref Data[sequence];
+        if (index1 <= index2)
+            return new EventBatch<T>(Data, index1, index2 - index1 + 1);
 
-        public IDataProvider<T> AsDataProvider() => this;
-        public IValueDataProvider<T> AsValueDataProvider() => this;
+        return new EventBatch<T>(Data, index1, Data.Length - index1);
     }
 }

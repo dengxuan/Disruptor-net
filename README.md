@@ -1,7 +1,7 @@
 # Disruptor-net
 
-[![Build](https://github.com/Disruptor-net/Disruptor-net/workflows/Build/badge.svg)](https://github.com/Disruptor-net/Disruptor-net/actions?query=workflow%3ABuild)
-[![NuGet](https://buildstats.info/nuget/Disruptor)](http://www.nuget.org/packages/Disruptor/)
+[![Build](https://github.com/Disruptor-net/Disruptor-net/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/disruptor-net/Disruptor-net/actions?query=branch%3Amaster+workflow%3ABuild++)
+[![NuGet package](https://img.shields.io/nuget/v/Disruptor.svg?logo=NuGet)](https://www.nuget.org/packages/Disruptor)
 
 ## Overview
 
@@ -9,15 +9,20 @@ The Disruptor is a high performance inter-thread message passing framework. This
 
 The Disruptor can be succinctly defined as a circular queue with a configurable sequence of consumers. The key features are:
 - Zero memory allocation after initial setup (the events are pre-allocated).
-- Push-based consumers.
+- Push-based [consumers](https://github.com/disruptor-net/Disruptor-net/wiki/Event-Handlers).
 - Optionally lock-free.
 - Configurable [wait strategies](https://github.com/disruptor-net/Disruptor-net/wiki/Wait-Strategies).
 
-Most of the information from the Java documentation is applicable to the .NET version, especially the [core concepts](https://github.com/LMAX-Exchange/disruptor/wiki/Introduction).
+## Release notes
 
-The quickest way to get started with the disruptor is by using the [NuGet package](https://www.nuget.org/packages/Disruptor).
+[Version 5.0.0](https://github.com/disruptor-net/Disruptor-net/releases/tag/5.0.0) has been released and is available on [NuGet](https://www.nuget.org/packages/Disruptor).
 
-## Sample code
+## Supported runtimes
+
+- .NET 5.0+
+- .NET Standard 2.1
+
+## Basic usage
 
 First, you need to define your event (message) type:
 
@@ -44,7 +49,7 @@ public class SampleEventHandler : IEventHandler<SampleEvent>
 Then you can setup the Disruptor:
 
 ```cs
-var disruptor = new Disruptor<SampleEvent>(() => new SampleEvent(), bufferSize: 1024);
+var disruptor = new Disruptor<SampleEvent>(() => new SampleEvent(), ringBufferSize: 1024);
 
 disruptor.HandleEventsWith(new SampleEventHandler());
 
@@ -62,18 +67,7 @@ using (var scope = disruptor.PublishEvent())
 }
 ```
 
-Other event [publication options](https://github.com/disruptor-net/Disruptor-net/wiki/Publication-Options) are described in the Wiki.
-
-## Roadmap
-
-* Include latest changes made to the future Java versions
-* Remove exception-based APIs
-* Improve documentation
-
-## Build from source and run tests
-
-You may build the Disruptor directly from the source, run `Cake-Build.bat`: it will compile, run the tests and output binaries and results into `\output\assembly` folder
-You can also run all the performance tests by running `Cake-Perf.bat`.
+Go to the wiki for a [more detailed introduction](https://github.com/disruptor-net/Disruptor-net/wiki/Getting-Started).
 
 ## License
 

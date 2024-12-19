@@ -1,136 +1,90 @@
 ﻿using System;
-using System.Globalization;
-using System.Linq;
-using System.Text.RegularExpressions;
-using Disruptor.PerfTests.External;
+using System.IO;
 
-namespace Disruptor.PerfTests
+namespace Disruptor.PerfTests;
+
+public class Program
 {
-    public class Program
+    public static void Main(string[] args)
     {
-        public static void Main(string[] args)
+        if (!ProgramOptions.TryParse(args, out var options))
         {
-            if (!Options.TryParse(args, out var options))
-            {
-                Options.PrintUsage();
-                return;
-            }
-
-            if (!TryLoadPerfTestTypes(options.Target, out var perfTestTypes))
-            {
-                Console.WriteLine($"Invalid target: [{options.Target}]");
-                return;
-            }
-
-            foreach (var perfTestType in perfTestTypes)
-            {
-                RunTestForType(perfTestType, options);
-            }
+            ProgramOptions.PrintUsage();
+            return;
         }
 
-        private static bool TryLoadPerfTestTypes(string target, out Type[] perfTestTypes)
+        if (!options.Validate())
+            return;
+
+        var selector = new PerfTestTypeSelector(options);
+        var testTypes = selector.GetPerfTestTypes();
+
+        foreach (var testType in testTypes)
         {
-            if ("all".Equals(target, StringComparison.OrdinalIgnoreCase))
-            {
-                perfTestTypes = typeof(Program).Assembly.GetTypes().Where(x => IsValidTestType(x) && !typeof(IExternalTest).IsAssignableFrom(x)).ToArray();
-                return true;
-            }
+            RunTestForType(testType, options);
+        }
+    }
 
-            var type = Resolve(target);
-            if (type != null && IsValidTestType(type))
-            {
-                perfTestTypes = new[] { type };
-                return true;
-            }
+    private static void RunTestForType(Type perfTestType, ProgramOptions options)
+    {
+        var outputDirectoryPath = Path.Combine(AppContext.BaseDirectory, "results");
+        if (options.GenerateReport)
+            Directory.CreateDirectory(outputDirectoryPath);
 
-            perfTestTypes = null;
+        var isThroughputTest = typeof(IThroughputTest).IsAssignableFrom(perfTestType);
+        if (isThroughputTest)
+        {
+            if (TryCreateTest<IThroughputTest>(perfTestType, options, out var test) && ValidateTest(test.RequiredProcessorCount, options))
+            {
+                using var session = new ThroughputTestSession(test, options, outputDirectoryPath);
+                session.Execute();
+            }
+            return;
+        }
+
+        var isLatencyTest = typeof(ILatencyTest).IsAssignableFrom(perfTestType);
+        if (isLatencyTest)
+        {
+            if (TryCreateTest<ILatencyTest>(perfTestType, options, out var test) && ValidateTest(test.RequiredProcessorCount, options))
+            {
+                var session = new LatencyTestSession(test, options, outputDirectoryPath);
+                session.Execute();
+            }
+            return;
+        }
+
+        throw new NotSupportedException($"Invalid test type: {perfTestType.Name}");
+    }
+
+    private static bool TryCreateTest<T>(Type testType, ProgramOptions options, out T test)
+    {
+        if (testType.GetConstructor([typeof(ProgramOptions)]) is { } constructor)
+        {
+            test = (T)constructor.Invoke([options]);
+            return true;
+        }
+
+        test = (T)Activator.CreateInstance(testType);
+        return test != null;
+    }
+
+    private static bool ValidateTest(int requiredProcessorCount, ProgramOptions options)
+    {
+        var availableProcessors = Environment.ProcessorCount;
+        if (requiredProcessorCount > availableProcessors)
+        {
+            Console.Error.WriteLine("Error: your system has insufficient CPUs to execute the test efficiently.");
+            Console.Error.WriteLine($"CPU count required = {requiredProcessorCount}, available = {availableProcessors}");
             return false;
-
-            bool IsValidTestType(Type t) => !t.IsAbstract && (typeof(IThroughputTest).IsAssignableFrom(t) || typeof(ILatencyTest).IsAssignableFrom(t));
-            Type Resolve(string typeName) => Type.GetType(typeName) ?? typeof(Program).Assembly.ExportedTypes.FirstOrDefault(x => x.Name == typeName);
         }
 
-        private static void RunTestForType(Type perfTestType, Options options)
+        if (requiredProcessorCount > options.CpuSet.Length)
         {
-            var isThroughputTest = typeof(IThroughputTest).IsAssignableFrom(perfTestType);
-            var isLatencyTest = typeof(ILatencyTest).IsAssignableFrom(perfTestType);
-
-            //Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal;
-
-            if (isThroughputTest)
-            {
-                var session = new ThroughputTestSession(perfTestType);
-                session.Run(options);
-                session.Report(options);
-            }
-
-            if (isLatencyTest)
-            {
-                var session = new LatencyTestSession(perfTestType);
-                session.Run(options);
-                session.Report(options);
-            }
+            Console.Error.WriteLine("Error: the CPU set is two small to execute the test efficiently.");
+            Console.Error.WriteLine($"CPU count required = {requiredProcessorCount}, CPU set length = {options.CpuSet.Length}");
+            return false;
         }
 
-        public class Options
-        {
-            public int? RunCount { get; set; }
-            public string Target { get; set; }
-            public bool ShouldPrintComputerSpecifications { get; set; }
-            public bool ShouldGenerateReport { get; set; }
-            public bool ShouldOpenReport { get; set; }
-
-            public static bool TryParse(string[] args, out Options options)
-            {
-                options = new Options
-                {
-                    ShouldPrintComputerSpecifications = true,
-                    ShouldGenerateReport = true,
-                    ShouldOpenReport = false,
-                };
-
-                if (args.Length == 0 || string.IsNullOrEmpty(args[0]))
-                    return false;
-
-                options.Target = args[0];
-
-                foreach (var arg in args.Skip(1))
-                {
-                    switch (arg.ToLowerInvariant())
-                    {
-                        case string s when Regex.Match(s, "--report=(true|false)") is var m && m.Success:
-                            options.ShouldGenerateReport = bool.Parse(m.Groups[1].Value);
-                            break;
-
-                        case string s when Regex.Match(s, "--openreport=(true|false)") is var m && m.Success:
-                            options.ShouldOpenReport = bool.Parse(m.Groups[1].Value);
-                            break;
-
-                        case string s when Regex.Match(s, "--printspec=(true|false)") is var m && m.Success:
-                            options.ShouldPrintComputerSpecifications = bool.Parse(m.Groups[1].Value);
-                            break;
-
-                        case string s when Regex.Match(s, "--runs=(\\d+)") is var m && m.Success:
-                            options.RunCount = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-                            break;
-
-                        default:
-                            return false;
-                    }
-                }
-
-                return true;
-            }
-
-            public static void PrintUsage()
-            {
-                Console.WriteLine($"Usage: {AppDomain.CurrentDomain.FriendlyName} target [--report=false] [--openreport=false] [--printspec=false] [--runs=count]");
-                Console.WriteLine();
-                Console.WriteLine("Options:");
-                Console.WriteLine("     target           Test type full name or \"all\" for all tests");
-                Console.WriteLine("   --runs=count     Number of runs");
-                Console.WriteLine();
-            }
-        }
+        return true;
     }
 }

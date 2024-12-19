@@ -4,144 +4,152 @@ using System.Threading.Tasks;
 using Disruptor.Dsl;
 using NUnit.Framework;
 
-namespace Disruptor.Tests
+namespace Disruptor.Tests;
+
+[TestFixture]
+public class WorkerStressTest
 {
-    [TestFixture]
-    public class WorkerStressTest
+    [Test]
+    public void ShouldHandleLotsOfThreads()
     {
-        [Test]
-        public void ShouldHandleLotsOfThreads()
+        var disruptor = new Disruptor<TestEvent>(TestEvent.Factory, 65_536, TaskScheduler.Current, ProducerType.Multi, new SleepingWaitStrategy());
+        var ringBuffer = disruptor.RingBuffer;
+        disruptor.SetDefaultExceptionHandler(new FatalExceptionHandler<TestEvent>());
+
+        const int iterations = 20_000_000;
+        var publisherCount = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
+        var handlerCount = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
+
+        var end = new CountdownEvent(publisherCount);
+        var start = new CountdownEvent(publisherCount);
+
+        var handlers = Initialise(new TestWorkHandler[handlerCount]);
+        var publishers = Initialise(new Publisher[publisherCount], ringBuffer, iterations, start, end);
+
+        disruptor.HandleEventsWithWorkerPool(handlers);
+
+        disruptor.Start();
+
+        foreach (var publisher in publishers)
         {
-            var disruptor = new Disruptor<TestEvent>(TestEvent.Factory, 1 << 16, TaskScheduler.Current, ProducerType.Multi, new SleepingWaitStrategy());
-            var ringBuffer = disruptor.RingBuffer;
-            disruptor.SetDefaultExceptionHandler(new FatalExceptionHandler());
-
-            var threads = Math.Max(1, Environment.ProcessorCount / 2);
-
-            const int iterations = 20000000;
-            var publisherCount = threads;
-            var handlerCount = threads;
-
-            var end = new CountdownEvent(publisherCount);
-            var start = new CountdownEvent(publisherCount);
-
-            var handlers = Initialise(new TestWorkHandler[handlerCount]);
-            var publishers = Initialise(new Publisher[publisherCount], ringBuffer, iterations, start, end);
-
-            disruptor.HandleEventsWithWorkerPool(handlers);
-
-            disruptor.Start();
-
-            foreach (var publisher in publishers)
-            {
-                Task.Factory.StartNew(publisher.Run);
-            }
-
-            end.Wait();
-            while (ringBuffer.Cursor < (iterations - 1))
-            {
-                Thread.Sleep(0); // LockSupport.parkNanos(1);
-            }
-
-            disruptor.Shutdown();
-
-            foreach (var publisher in publishers)
-            {
-                Assert.That(publisher.Failed, Is.EqualTo(false));
-            }
-
-            foreach (var handler in handlers)
-            {
-                Assert.That(handler.MessagesSeen, Is.Not.EqualTo(0));
-            }
+            Task.Factory.StartNew(publisher.Run);
         }
 
-        private Publisher[] Initialise(Publisher[] publishers, RingBuffer<TestEvent> buffer, int messageCount, CountdownEvent start, CountdownEvent end)
-        {
-            for (var i = 0; i < publishers.Length; i++)
-            {
-                publishers[i] = new Publisher(buffer, messageCount, start, end);
-            }
+        end.Wait();
 
-            return publishers;
+        var spinWait = new AggressiveSpinWait();
+
+        while (ringBuffer.Cursor < (iterations - 1))
+        {
+            spinWait.SpinOnce();
         }
 
-        private TestWorkHandler[] Initialise(TestWorkHandler[] testWorkHandlers)
-        {
-            for (var i = 0; i < testWorkHandlers.Length; i++)
-            {
-                var handler = new TestWorkHandler();
-                testWorkHandlers[i] = handler;
-            }
+        disruptor.Shutdown();
 
-            return testWorkHandlers;
+        foreach (var publisher in publishers)
+        {
+            Assert.That(publisher.Failed, Is.EqualTo(false));
         }
 
-        private class TestWorkHandler : IWorkHandler<TestEvent>
+        foreach (var handler in handlers)
         {
-            public int MessagesSeen;
+            Assert.That(handler.MessagesSeen, Is.Not.EqualTo(0));
+            Assert.That(handler.FailureCount, Is.EqualTo(0));
+        }
+    }
 
-            public void OnEvent(TestEvent @event)
-            {
-                MessagesSeen++;
-            }
+    private Publisher[] Initialise(Publisher[] publishers, RingBuffer<TestEvent> buffer, int messageCount, CountdownEvent start, CountdownEvent end)
+    {
+        for (var i = 0; i < publishers.Length; i++)
+        {
+            publishers[i] = new Publisher(buffer, messageCount, start, end);
         }
 
-        private class Publisher
+        return publishers;
+    }
+
+    private TestWorkHandler[] Initialise(TestWorkHandler[] testWorkHandlers)
+    {
+        for (var i = 0; i < testWorkHandlers.Length; i++)
         {
-            private readonly RingBuffer<TestEvent> _ringBuffer;
-            private readonly CountdownEvent _end;
-            private readonly CountdownEvent _start;
-            private readonly int _iterations;
+            var handler = new TestWorkHandler();
+            testWorkHandlers[i] = handler;
+        }
 
-            public bool Failed;
+        return testWorkHandlers;
+    }
 
-            public Publisher(RingBuffer<TestEvent> ringBuffer, int iterations, CountdownEvent start, CountdownEvent end)
+    private class TestWorkHandler : IWorkHandler<TestEvent>
+    {
+        public int FailureCount;
+        public int MessagesSeen;
+
+        public void OnEvent(TestEvent @event)
+        {
+            if (@event.A != @event.Sequence + 13 || @event.B != @event.Sequence - 7)
             {
-                _ringBuffer = ringBuffer;
-                _end = end;
-                _start = start;
-                _iterations = iterations;
+                FailureCount++;
             }
 
-            public void Run()
+            MessagesSeen++;
+        }
+    }
+
+    private class Publisher
+    {
+        private readonly RingBuffer<TestEvent> _ringBuffer;
+        private readonly CountdownEvent _end;
+        private readonly CountdownEvent _start;
+        private readonly int _iterations;
+
+        public bool Failed;
+
+        public Publisher(RingBuffer<TestEvent> ringBuffer, int iterations, CountdownEvent start, CountdownEvent end)
+        {
+            _ringBuffer = ringBuffer;
+            _end = end;
+            _start = start;
+            _iterations = iterations;
+        }
+
+        public void Run()
+        {
+            try
             {
-                try
+                _start.Signal();
+                _start.Wait();
+
+                var i = _iterations;
+                while (--i != -1)
                 {
-                    _start.Signal();
-                    _start.Wait();
-
-                    var i = _iterations;
-                    while (--i != -1)
-                    {
-                        var next = _ringBuffer.Next();
-                        var testEvent = _ringBuffer[next];
-                        testEvent.Sequence = next;
-                        testEvent.A = next + 13;
-                        testEvent.B = next - 7;
-                        testEvent.S = "wibble-";
-                        _ringBuffer.Publish(next);
-                    }
-                }
-                catch (Exception)
-                {
-                    Failed = true;
-                }
-                finally
-                {
-                    _end.Signal();
+                    var next = _ringBuffer.Next();
+                    var testEvent = _ringBuffer[next];
+                    testEvent.Sequence = next;
+                    testEvent.A = next + 13;
+                    testEvent.B = next - 7;
+                    _ringBuffer.Publish(next);
                 }
             }
+            catch (Exception)
+            {
+                Failed = true;
+            }
+            finally
+            {
+                _end.Signal();
+            }
         }
+    }
 
-        private class TestEvent
-        {
-            public static readonly Func<TestEvent> Factory = () => new TestEvent();
+    private class TestEvent
+    {
+        public static readonly Func<TestEvent> Factory = () => new TestEvent();
 
-            public long Sequence;
-            public long A;
-            public long B;
-            public string S;
-        }
+        public long Sequence;
+        public long A;
+        public long B;
+
+        // The string member was removed because it was not really useful for the test
+        // but the allocations made the test too slow.
     }
 }

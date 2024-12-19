@@ -3,149 +3,153 @@ using Disruptor.Dsl;
 using Disruptor.Tests.Support;
 using NUnit.Framework;
 
-namespace Disruptor.Tests
+namespace Disruptor.Tests;
+
+public class ValueRingBufferTests : ValueRingBufferFixture<StubValueEvent>
 {
-    public class ValueRingBufferTests : ValueRingBufferFixture<StubValueEvent>
+    public ValueRingBufferTests()
+        : base(x => CreateRingBuffer(x.size, x.producerType))
     {
-        protected override IValueRingBuffer<StubValueEvent> CreateRingBuffer(int size, ProducerType producerType)
+    }
+
+    private static IValueRingBuffer<StubValueEvent> CreateRingBuffer(int size, ProducerType producerType)
+    {
+        return new ValueRingBuffer<StubValueEvent>(() => new StubValueEvent(-1), SequencerFactory.Create(producerType, size));
+    }
+
+    [Test]
+    public void ShouldPublishEvent()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        using (var scope = ringBuffer.PublishEvent())
         {
-            return new ValueRingBuffer<StubValueEvent>(() => new StubValueEvent(-1), SequencerFactory.Create(producerType, size));
+            scope.Event() = scope.Sequence;
         }
 
-        [Test]
-        public void ShouldPublishEvent()
+        using (var scope = ringBuffer.TryPublishEvent())
         {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
-
-            using (var scope = ringBuffer.PublishEvent())
-            {
-                scope.Event() = scope.Sequence;
-            }
-
-            using (var scope = ringBuffer.TryPublishEvent())
-            {
-                Assert.IsTrue(scope.HasEvent);
-                Assert.IsTrue(scope.TryGetEvent(out var e));
-                e.Event() = e.Sequence;
-            }
-
-            Assert.That(ringBuffer, ValueRingBufferEqualsConstraint.IsValueRingBufferWithEvents(0L, 1L));
+            Assert.That(scope.HasEvent);
+            Assert.That(scope.TryGetEvent(out var e));
+            e.Event() = e.Sequence;
         }
 
-        [Test]
-        public void ShouldPublishEvents()
+        Assert.That(ringBuffer, IsValueRingBuffer.WithEvents(0L, 1L));
+    }
+
+    [Test]
+    public void ShouldPublishEvents()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        using (var scope = ringBuffer.PublishEvents(2))
         {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
-
-            using (var scope = ringBuffer.PublishEvents(2))
-            {
-                scope.Event(0) = scope.StartSequence;
-                scope.Event(1) = scope.StartSequence + 1;
-            }
-
-            Assert.That(ringBuffer, ValueRingBufferEqualsConstraint.IsValueRingBufferWithEvents(0L, 1L, -1, -1));
-
-            using (var scope = ringBuffer.TryPublishEvents(2))
-            {
-                Assert.IsTrue(scope.HasEvents);
-                Assert.IsTrue(scope.TryGetEvents(out var e));
-                e.Event(0) = e.StartSequence;
-                e.Event(1) = e.StartSequence + 1;
-            }
-
-            Assert.That(ringBuffer, ValueRingBufferEqualsConstraint.IsValueRingBufferWithEvents(0L, 1L, 2L, 3L));
+            scope.Event(0) = scope.StartSequence;
+            scope.Event(1) = scope.StartSequence + 1;
         }
 
-        [Test]
-        public void ShouldNotPublishEventsIfBatchIsLargerThanRingBuffer()
-        {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+        Assert.That(ringBuffer, IsValueRingBuffer.WithEvents(0L, 1L, -1, -1));
 
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(5));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+        using (var scope = ringBuffer.TryPublishEvents(2))
+        {
+            Assert.That(scope.HasEvents);
+            Assert.That(scope.TryGetEvents(out var e));
+            e.Event(0) = e.StartSequence;
+            e.Event(1) = e.StartSequence + 1;
         }
 
-        [Test]
-        public void ShouldNotPublishEventsWhenBatchSizeIs0()
+        Assert.That(ringBuffer, IsValueRingBuffer.WithEvents(0L, 1L, 2L, 3L));
+    }
+
+    [Test]
+    public void ShouldNotPublishEventsIfBatchIsLargerThanRingBuffer()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(0));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(5));
         }
-
-        [Test]
-        public void ShouldNotTryPublishEventsWhenBatchSizeIs0()
+        finally
         {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(0));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            AssertEmptyRingBuffer(ringBuffer);
         }
+    }
 
-        [Test]
-        public void ShouldNotPublishEventsWhenBatchSizeIsNegative()
+    [Test]
+    public void ShouldNotPublishEventsWhenBatchSizeIs0()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(-1));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(0));
         }
-
-        [Test]
-        public void ShouldNotTryPublishEventsWhenBatchSizeIsNegative()
+        finally
         {
-            var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
-
-            try
-            {
-                Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(-1));
-            }
-            finally
-            {
-                AssertEmptyRingBuffer(ringBuffer);
-            }
+            AssertEmptyRingBuffer(ringBuffer);
         }
+    }
 
-        [TestCase(0)]
-        [TestCase(1)]
-        [TestCase(31)]
-        [TestCase(32)]
-        [TestCase(int.MaxValue)]
-        [TestCase(int.MaxValue +1L)]
-        public void ShouldGetEventFromSequence(long sequence)
+    [Test]
+    public void ShouldNotTryPublishEventsWhenBatchSizeIs0()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        try
         {
-            var index = 0;
-            var ringBuffer = new ValueRingBuffer<StubValueEvent>(() => new StubValueEvent(index++), 32);
-
-            ref var evt = ref ringBuffer[sequence];
-
-            var expectedIndex = sequence % 32;
-            Assert.That(evt.Value, Is.EqualTo(expectedIndex));
+            Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(0));
         }
+        finally
+        {
+            AssertEmptyRingBuffer(ringBuffer);
+        }
+    }
+
+    [Test]
+    public void ShouldNotPublishEventsWhenBatchSizeIsNegative()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        try
+        {
+            Assert.Throws<ArgumentException>(() => ringBuffer.PublishEvents(-1));
+        }
+        finally
+        {
+            AssertEmptyRingBuffer(ringBuffer);
+        }
+    }
+
+    [Test]
+    public void ShouldNotTryPublishEventsWhenBatchSizeIsNegative()
+    {
+        var ringBuffer = ValueRingBuffer<long>.CreateSingleProducer(() => -1L, 4);
+
+        try
+        {
+            Assert.Throws<ArgumentException>(() => ringBuffer.TryPublishEvents(-1));
+        }
+        finally
+        {
+            AssertEmptyRingBuffer(ringBuffer);
+        }
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(31)]
+    [TestCase(32)]
+    [TestCase(int.MaxValue)]
+    [TestCase(int.MaxValue +1L)]
+    public void ShouldGetEventFromSequence(long sequence)
+    {
+        var index = 0;
+        var ringBuffer = new ValueRingBuffer<StubValueEvent>(() => new StubValueEvent(index++), 32);
+
+        ref var evt = ref ringBuffer[sequence];
+
+        var expectedIndex = sequence % 32;
+        Assert.That(evt.Value, Is.EqualTo(expectedIndex));
     }
 }

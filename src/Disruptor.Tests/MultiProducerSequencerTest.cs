@@ -1,31 +1,47 @@
 ﻿using NUnit.Framework;
 
-namespace Disruptor.Tests
+namespace Disruptor.Tests;
+
+[TestFixture]
+public class MultiProducerSequencerTest : SequencerTests
 {
-    [TestFixture]
-    public class MultiProducerSequencerTest
+    [Test]
+    public void ShouldOnlyAllowMessagesToBeAvailableIfSpecificallyPublished()
     {
-        private MultiProducerSequencer _publisher;
+        var sequencer = new MultiProducerSequencer(32);
 
-        [SetUp]
-        public void SetUp()
+        sequencer.Publish(3);
+        sequencer.Publish(5);
+
+        Assert.That(sequencer.IsAvailable(0), Is.EqualTo(false));
+        Assert.That(sequencer.IsAvailable(1), Is.EqualTo(false));
+        Assert.That(sequencer.IsAvailable(2), Is.EqualTo(false));
+        Assert.That(sequencer.IsAvailable(3), Is.EqualTo(true));
+        Assert.That(sequencer.IsAvailable(4), Is.EqualTo(false));
+        Assert.That(sequencer.IsAvailable(5), Is.EqualTo(true));
+        Assert.That(sequencer.IsAvailable(6), Is.EqualTo(false));
+    }
+
+    [Test]
+    public void ShouldGetHighestPublishedSequence([Range(2, 7)] int publishedSequence)
+    {
+        var sequencer = new MultiProducerSequencer(32);
+
+        for (var i = 0; i <= 7; i++)
         {
-            _publisher = new MultiProducerSequencer(1024);
+            sequencer.Next();
         }
 
-        [Test]
-        public void ShouldOnlyAllowMessagesToBeAvailableIfSpecificallyPublished()
+        for (var i = 0; i <= publishedSequence; i++)
         {
-            _publisher.Publish(3);
-            _publisher.Publish(5);
-
-            Assert.That(_publisher.IsAvailable(0), Is.EqualTo(false));
-            Assert.That(_publisher.IsAvailable(1), Is.EqualTo(false));
-            Assert.That(_publisher.IsAvailable(2), Is.EqualTo(false));
-            Assert.That(_publisher.IsAvailable(3), Is.EqualTo(true));
-            Assert.That(_publisher.IsAvailable(4), Is.EqualTo(false));
-            Assert.That(_publisher.IsAvailable(5), Is.EqualTo(true));
-            Assert.That(_publisher.IsAvailable(6), Is.EqualTo(false));
+            sequencer.Publish(i);
         }
+
+        Assert.That(sequencer.GetHighestPublishedSequence(3, 7), Is.EqualTo(publishedSequence));
+    }
+
+    protected override ISequencer NewSequencer(IWaitStrategy waitStrategy, int bufferSize = 16)
+    {
+        return new MultiProducerSequencer(bufferSize, waitStrategy);
     }
 }

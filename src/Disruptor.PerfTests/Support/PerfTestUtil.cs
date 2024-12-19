@@ -1,49 +1,54 @@
 ﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Disruptor.Processing;
 
-namespace Disruptor.PerfTests.Support
+namespace Disruptor.PerfTests.Support;
+
+public class PerfTestUtil
 {
-    public class PerfTestUtil
+    public static Task StartLongRunning(Action action)
     {
-        public static Task StartLongRunning(Action action)
+        return Task.Factory.StartNew(action, TaskCreationOptions.LongRunning);
+    }
+
+    public static long AccumulatedAddition(long iterations)
+    {
+        long temp = 0L;
+        for (long i = 0L; i < iterations; i++)
         {
-            return Task.Factory.StartNew(action, TaskCreationOptions.LongRunning);
+            temp += i;
         }
 
-        public static long AccumulatedAddition(long iterations)
-        {
-            long temp = 0L;
-            for (long i = 0L; i < iterations; i++)
-            {
-                temp += i;
-            }
+        return temp;
+    }
 
-            return temp;
+    public static void FailIf(long a, long b, string message = null)
+    {
+        if (a == b)
+        {
+            throw new Exception(message ?? $"Test failed {a} == {b}");
         }
+    }
 
-        public static void FailIf(long a, long b, string message = null)
+    public static void FailIfNot(long a, long b, string message = null)
+    {
+        if (a != b)
         {
-            if (a == b)
-            {
-                throw new Exception(message ?? $"Test failed {a} == {b}");
-            }
+            throw new Exception(message ?? $"Test failed {a} != {b}");
         }
+    }
 
-        public static void FailIfNot(long a, long b, string message = null)
-        {
-            if (a != b)
-            {
-                throw new Exception(message ?? $"Test failed {a} != {b}");
-            }
-        }
+    public static void WaitForEventProcessorSequence(long expectedCount, IEventProcessor eventProcessor)
+    {
+        WaitForEventProcessorSequence(expectedCount, eventProcessor.Sequence);
+    }
 
-        public static void WaitForEventProcessorSequence(long expectedCount, IEventProcessor batchEventProcessor)
+    public static void WaitForEventProcessorSequence(long expectedCount, Sequence sequence)
+    {
+        while (sequence.Value != expectedCount)
         {
-            while (batchEventProcessor.Sequence.Value != expectedCount)
-            {
-                Thread.Sleep(1);
-            }
+            Thread.Sleep(1);
         }
     }
 }

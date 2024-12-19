@@ -1,17 +1,25 @@
-﻿namespace Disruptor.Tests.Support
+﻿using System.Threading;
+
+namespace Disruptor.Tests.Support;
+
+public class DummyWaitStrategy : IWaitStrategy
 {
-    public class DummyWaitStrategy : IWaitStrategy
+    public DummyWaitStrategy(bool isBlockingStrategy = true)
     {
-        public int SignalAllWhenBlockingCalls { get; private set; }
+        IsBlockingStrategy = isBlockingStrategy;
+    }
 
-        public long WaitFor(long sequence, Sequence cursor, ISequence dependentSequence, ISequenceBarrier barrier)
-        {
-            return 0;
-        }
+    public bool IsBlockingStrategy { get; private set; }
 
-        public void SignalAllWhenBlocking()
-        {
-            SignalAllWhenBlockingCalls++;
-        }
+    public int SignalAllWhenBlockingCalls { get; private set; }
+
+    public SequenceWaitResult WaitFor(long sequence, DependentSequenceGroup dependentSequences, CancellationToken cancellationToken)
+    {
+        return 0;
+    }
+
+    public void SignalAllWhenBlocking()
+    {
+        SignalAllWhenBlockingCalls++;
     }
 }

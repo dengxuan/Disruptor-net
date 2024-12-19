@@ -1,15 +1,9 @@
-﻿using NUnit.Framework;
-using static Disruptor.Tests.Support.WaitStrategyTestUtil;
+﻿namespace Disruptor.Tests;
 
-namespace Disruptor.Tests
+public class BusySpinWaitStrategyTests : WaitStrategyFixture<BusySpinWaitStrategy>
 {
-    [TestFixture]
-    public class BusySpinWaitStrategyTests
+    protected override BusySpinWaitStrategy CreateWaitStrategy()
     {
-        [Test]
-        public void ShouldWaitForValue()
-        {
-            AssertWaitForWithDelayOf(50, new BusySpinWaitStrategy());
-        }
+        return new BusySpinWaitStrategy();
     }
 }

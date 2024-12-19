@@ -1,7 +1,12 @@
-﻿namespace Disruptor
+﻿namespace Disruptor;
+
+/// <summary>
+/// Exposes the ring buffer events.
+/// </summary>
+public interface IValueDataProvider<T>
 {
-    public interface IValueDataProvider<T>
-    {
-        ref T this[long sequence] { get; }
-    }
+    /// <summary>
+    /// Gets the event for a given sequence in the ring buffer.
+    /// </summary>
+    ref T this[long sequence] { get; }
 }

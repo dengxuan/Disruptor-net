@@ -6,157 +6,150 @@ using System.Linq;
 using System.Text;
 using BenchmarkDotNet.Environments;
 
-namespace Disruptor.PerfTests
+namespace Disruptor.PerfTests;
+
+public class ThroughputTestSession : IDisposable
 {
-    public class ThroughputTestSession
+    private readonly IThroughputTest _test;
+    private readonly ProgramOptions _options;
+    private readonly string _resultDirectoryPath;
+
+    public ThroughputTestSession(IThroughputTest test, ProgramOptions options, string resultDirectoryPath)
     {
-        private readonly List<ThroughputTestSessionResult> _results = new List<ThroughputTestSessionResult>(10);
-        private readonly Type _perfTestType;
-        private IThroughputTest _test;
-        private int _runCount;
+        _test = test;
+        _options = options;
+        _resultDirectoryPath = resultDirectoryPath;
+    }
 
-        public ThroughputTestSession(Type perfTestType)
+    public void Execute()
+    {
+        var results = Run();
+        Report(results);
+    }
+
+    private List<ThroughputTestSessionResult> Run()
+    {
+        Console.Write($"Throughput Test to run => {_test.GetType().FullName}, Runs => {_options.RunCountForThroughputTest}");
+        if (_options.HasCustomCpuSet)
+            Console.Write($", Cpus: [{string.Join(", ", _options.CpuSet)}]");
+
+        Console.WriteLine();
+        Console.WriteLine("Starting");
+
+        var results = new List<ThroughputTestSessionResult>();
+        var context = new ThroughputSessionContext();
+
+        for (var i = 0; i < _options.RunCountForThroughputTest; i++)
         {
-            _perfTestType = perfTestType;
-        }
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
 
-        public void Run(Program.Options options)
-        {
-            _runCount = options.RunCount ?? 7;
+            context.Reset();
 
-            Console.WriteLine($"Throughput Test to run => {_perfTestType.FullName}, Runs => {_runCount}");
+            var beforeGen0Count = GC.CollectionCount(0);
+            var beforeGen1Count = GC.CollectionCount(1);
+            var beforeGen2Count = GC.CollectionCount(2);
 
-            _test = (IThroughputTest)Activator.CreateInstance(_perfTestType);
-            CheckProcessorsRequirements(_test);
-
-            Console.WriteLine("Starting");
-            var context = new ThroughputSessionContext();
-
-            for (var i = 0; i < _runCount; i++)
+            ThroughputTestSessionResult result;
+            try
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                var totalOperationsInRun = _test.Run(context);
 
-                context.Reset();
+                var gen0Count = GC.CollectionCount(0) - beforeGen0Count;
+                var gen1Count = GC.CollectionCount(1) - beforeGen1Count;
+                var gen2Count = GC.CollectionCount(2) - beforeGen2Count;
 
-                var beforeGen0Count = GC.CollectionCount(0);
-                var beforeGen1Count = GC.CollectionCount(1);
-                var beforeGen2Count = GC.CollectionCount(2);
-
-                long totalOperationsInRun = 0;
-                Exception exception = null;
-                ThroughputTestSessionResult result;
-                try
-                {
-                    totalOperationsInRun = _test.Run(context);
-                }
-                catch (Exception ex)
-                {
-                    exception = ex;
-                }
-
-                if (exception != null)
-                {
-                    result = new ThroughputTestSessionResult(exception);
-                }
-                else
-                {
-                    var gen0Count = GC.CollectionCount(0) - beforeGen0Count;
-                    var gen1Count = GC.CollectionCount(1) - beforeGen1Count;
-                    var gen2Count = GC.CollectionCount(2) - beforeGen2Count;
-
-                    result = new ThroughputTestSessionResult(totalOperationsInRun, context.Stopwatch.Elapsed, gen0Count, gen1Count, gen2Count, context);
-                }
-
-                Console.WriteLine(result);
-                _results.Add(result);
+                result = new ThroughputTestSessionResult(totalOperationsInRun, context.ElapsedTime, gen0Count, gen1Count, gen2Count, context);
             }
-        }
-
-        public void Report(Program.Options options)
-        {
-            var computerSpecifications = new ComputerSpecifications();
-
-            if (options.ShouldPrintComputerSpecifications)
+            catch (Exception ex)
             {
-                Console.WriteLine();
-                Console.Write(computerSpecifications.ToString());
+                result = new ThroughputTestSessionResult(ex);
             }
 
-            if (!options.ShouldGenerateReport)
-                return;
-
-            var path = Path.Combine(Environment.CurrentDirectory, _perfTestType.Name + "-" + DateTime.UtcNow.ToString("yyyy-MM-dd hh-mm-ss") + ".html");
-            File.WriteAllText(path, BuildReport(computerSpecifications));
-
-            var totalsPath = Path.Combine(Environment.CurrentDirectory, $"Totals-{DateTime.Now:yyyy-MM-dd}.csv");
-            var average = _results.Average(x => x.TotalOperationsInRun / x.Duration.TotalSeconds);
-            File.AppendAllText(totalsPath, FormattableString.Invariant($"{DateTime.Now:HH:mm:ss},{_perfTestType.Name},{average}\n"));
-
-            if (options.ShouldOpenReport)
-                Process.Start(path);
+            Console.WriteLine(result);
+            results.Add(result);
         }
 
-        private void CheckProcessorsRequirements(IThroughputTest test)
+        return results;
+    }
+
+    private void Report(List<ThroughputTestSessionResult> results)
+    {
+        var computerSpecifications = new ComputerSpecifications();
+
+        if (_options.PrintComputerSpecifications)
         {
-            var availableProcessors = Environment.ProcessorCount;
-            if (test.RequiredProcessorCount <= availableProcessors)
-                return;
-
-            Console.WriteLine("*** Warning ***: your system has insufficient processors to execute the test efficiently. ");
-            Console.WriteLine($"Processors required = {test.RequiredProcessorCount}, available = {availableProcessors}");
+            Console.WriteLine();
+            Console.Write(computerSpecifications.ToString());
         }
 
-        private string BuildReport(ComputerSpecifications computerSpecifications)
+        if (!_options.GenerateReport)
+            return;
+
+        var path = Path.Combine(_resultDirectoryPath, $"{_test.GetType().Name}-{DateTime.UtcNow:yyyy-MM-dd hh-mm-ss}.html");
+        File.WriteAllText(path, BuildReport(results, computerSpecifications));
+
+        var totalsPath = Path.Combine(_resultDirectoryPath, $"Totals-{DateTime.Now:yyyy-MM-dd}.csv");
+        var average = results.Average(x => x.TotalOperationsInRun / x.Duration.TotalSeconds);
+        File.AppendAllText(totalsPath, FormattableString.Invariant($"{DateTime.Now:HH:mm:ss},{_test.GetType().Name},{average}{Environment.NewLine}"));
+
+        if (_options.OpenReport)
+            Process.Start(path);
+    }
+
+    private string BuildReport(List<ThroughputTestSessionResult> results, ComputerSpecifications computerSpecifications)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0 Transitional//EN\">")
+          .AppendLine("<html>")
+          .AppendLine("	<head>")
+          .AppendLine("		<title>Disruptor-net - Test Report</title>")
+          .AppendLine("	</head>")
+          .AppendLine("	<body>")
+          .AppendLine("        Local time: " + DateTime.Now + "<br>")
+          .AppendLine("        UTC time: " + DateTime.UtcNow);
+
+        sb.AppendLine("        <h2>Host configuration</h2>");
+
+        computerSpecifications.AppendHtml(sb);
+        if (computerSpecifications.PhysicalCoreCount < 4)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0 Transitional//EN\">")
-                .AppendLine("<html>")
-                .AppendLine("	<head>")
-                .AppendLine("		<title>Disruptor-net - Test Report</title>")
-                .AppendLine("	</head>")
-                .AppendLine("	<body>")
-                .AppendLine("        Local time: " + DateTime.Now + "<br>")
-                .AppendLine("        UTC time: " + DateTime.UtcNow);
-
-            sb.AppendLine("        <h2>Host configuration</h2>");
-
-            computerSpecifications.AppendHtml(sb);
-            if (computerSpecifications.PhysicalCoreCount < 4)
-            {
-                sb.AppendFormat("        <b><font color='red'>Your computer has {0} physical core(s) but most of the tests require at least 4 cores</font></b><br>", computerSpecifications.PhysicalCoreCount);
-            }
-            if (computerSpecifications.IsHyperThreaded)
-            {
-                sb.AppendLine("        <b><font color='red'>Hyperthreading can degrade performance, you should turn it off.</font></b><br>");
-            }
-
-            sb.AppendLine("        <h2>Test configuration</h2>")
-              .AppendLine("        Test: " + _perfTestType.FullName + "<br>")
-              .AppendLine("        Runs: " + _runCount + "<br>");
-            if (_test.RequiredProcessorCount > Environment.ProcessorCount)
-                sb.AppendLine("        Warning ! Test requires: " + _test.RequiredProcessorCount + " processors but there is only " + Environment.ProcessorCount + " here <br>");
-
-            sb.AppendLine("        <h2>Detailed test results</h2>");
-            sb.AppendLine("        <table border=\"1\">");
-            sb.AppendLine("            <tr>");
-            sb.AppendLine("                <td>Run</td>");
-            sb.AppendLine("                <td>Operations per second</td>");
-            sb.AppendLine("                <td>Duration (ms)</td>");
-            sb.AppendLine("                <td># GC (0-1-2)</td>");
-            sb.AppendLine("                <td>Batch %</td>");
-            sb.AppendLine("                <td>Average Batch Size<td>");
-            sb.AppendLine("            </tr>");
-
-            for (var i = 0; i < _results.Count; i++)
-            {
-                var result = _results[i];
-                result.AppendDetailedHtmlReport(i, sb);
-            }
-
-            sb.AppendLine("        </table>");
-
-            return sb.ToString();
+            sb.AppendFormat("        <b><font color='red'>Your computer has {0} physical core(s) but most of the tests require at least 4 cores</font></b><br>", computerSpecifications.PhysicalCoreCount);
         }
+
+        if (computerSpecifications.IsHyperThreaded)
+        {
+            sb.AppendLine("        <b><font color='red'>Hyperthreading can degrade performance, you should turn it off.</font></b><br>");
+        }
+
+        sb.AppendLine("        <h2>Test configuration</h2>")
+          .AppendLine("        Test: " + _test.GetType().FullName + "<br>")
+          .AppendLine("        Runs: " + _options.RunCountForThroughputTest + "<br>")
+          .AppendLine("        <h2>Detailed test results</h2>")
+          .AppendLine("        <table border=\"1\">")
+          .AppendLine("            <tr>")
+          .AppendLine("                <td>Run</td>")
+          .AppendLine("                <td>Operations per second</td>")
+          .AppendLine("                <td>Duration (ms)</td>")
+          .AppendLine("                <td># GC (0-1-2)</td>")
+          .AppendLine("                <td>Batch %</td>")
+          .AppendLine("                <td>Average Batch Size<td>")
+          .AppendLine("            </tr>");
+
+        for (var i = 0; i < results.Count; i++)
+        {
+            var result = results[i];
+            result.AppendDetailedHtmlReport(i, sb);
+        }
+
+        sb.AppendLine("        </table>");
+
+        return sb.ToString();
+    }
+
+    public void Dispose()
+    {
+        if (_test is IDisposable disposable)
+            disposable.Dispose();
     }
 }

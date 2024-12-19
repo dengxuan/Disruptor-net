@@ -1,42 +1,52 @@
 using System.Threading;
-using Disruptor.Tests.Support;
+using Disruptor.Testing.Support;
 
-namespace Disruptor.PerfTests.Support
+namespace Disruptor.PerfTests.Support;
+
+public class LongArrayEventHandler(int? cpu = null) : IEventHandler<long[]>
 {
-    public class LongArrayEventHandler : IEventHandler<long[]>, IBatchStartAware
+    private PaddedLong _value;
+    private PaddedLong _batchesProcessed;
+    private long _count;
+    private ManualResetEvent _signal;
+    private ThreadAffinityScope _affinityScope;
+
+    public long Value => _value.Value;
+    public long BatchesProcessed => _batchesProcessed.Value;
+
+    public void OnStart()
     {
-        private PaddedLong _value;
-        private PaddedLong _batchesProcessed;
-        private long _count;
-        private ManualResetEvent _signal;
+        _affinityScope = ThreadAffinityUtil.SetThreadAffinity(cpu, ThreadPriority.Highest);
+    }
 
-        public long Value => _value.Value;
-        public long BatchesProcessed => _batchesProcessed.Value;
+    public void OnShutdown()
+    {
+        _affinityScope.Dispose();
+    }
 
-        public void Reset(ManualResetEvent signal, long expectedCount)
+    public void Reset(ManualResetEvent signal, long expectedCount)
+    {
+        _value.Value = 0;
+        _signal = signal;
+        _count = expectedCount;
+        _batchesProcessed.Value = 0;
+    }
+
+    public void OnEvent(long[] value, long sequence, bool endOfBatch)
+    {
+        for (var i = 0; i < value.Length; i++)
         {
-            _value.Value = 0;
-            _signal = signal;
-            _count = expectedCount;
-            _batchesProcessed.Value = 0;
+            _value.Value = _value.Value + value[i];
         }
 
-        public void OnEvent(long[] value, long sequence, bool endOfBatch)
+        if (--_count == 0)
         {
-            for (var i = 0; i < value.Length; i++)
-            {
-                _value.Value = _value.Value + value[i];
-            }
-
-            if (--_count == 0)
-            {
-                _signal?.Set();
-            }
+            _signal?.Set();
         }
+    }
 
-        public void OnBatchStart(long batchSize)
-        {
-            _batchesProcessed.Value = _batchesProcessed.Value + 1;
-        }
+    public void OnBatchStart(long batchSize)
+    {
+        _batchesProcessed.Value = _batchesProcessed.Value + 1;
     }
 }

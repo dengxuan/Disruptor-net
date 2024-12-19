@@ -1,21 +1,20 @@
 ﻿using System.Threading.Tasks;
 
-namespace Disruptor.Dsl
+namespace Disruptor.Dsl;
+
+internal interface IConsumerInfo
 {
-    public interface IConsumerInfo
-    {
-        ISequence[] Sequences { get; }
+    Sequence[] Sequences { get; }
 
-        ISequenceBarrier Barrier { get; }
+    DependentSequenceGroup? DependentSequences { get; }
 
-        bool IsEndOfChain { get; }
+    bool IsEndOfChain { get; }
 
-        void Start(TaskScheduler taskScheduler);
+    void Start(TaskScheduler taskScheduler);
 
-        void Halt();
+    void Halt();
 
-        void MarkAsUsedInBarrier();
+    void MarkAsUsedInBarrier();
 
-        bool IsRunning { get; }
-    }
+    bool IsRunning { get; }
 }

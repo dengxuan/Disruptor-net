@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net48;net5.0</TargetFrameworks>
+    <TargetFramework>net8.0</TargetFramework>
     <OutputType>exe</OutputType>
     <SignAssembly>false</SignAssembly>
     <DebugType>pdbonly</DebugType>
@@ -10,14 +10,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Disruptor.Tests\Disruptor.Tests.csproj" />
+    <ProjectReference Include="..\Disruptor.Testing\Disruptor.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.12.1" />
+    <PackageReference Include="BenchmarkDotNet" Version="0.13.2" />
     <PackageReference Include="HdrHistogram" Version="2.5.0" />
-    <PackageReference Include="ObjectLayoutInspector" Version="0.1.2" />
-    <PackageReference Include="System.Threading.Channels" Version="4.7.1" />
+    <PackageReference Include="ObjectLayoutInspector" Version="0.1.4" />
+    <PackageReference Include="System.Net.Http" Version="4.3.4"/>
+    <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1"/>
+    <PackageReference Include="System.Threading.Channels" Version="7.0.0" />
   </ItemGroup>
 
 </Project>

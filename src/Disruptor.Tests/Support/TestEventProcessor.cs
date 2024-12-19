@@ -1,34 +1,49 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
+using Disruptor.Processing;
+using Disruptor.Util;
 
-namespace Disruptor.Tests.Support
+namespace Disruptor.Tests.Support;
+
+public class TestEventProcessor : IEventProcessor
 {
-    public class TestEventProcessor : IEventProcessor
+    private readonly ManualResetEventSlim _runEvent = new();
+    private readonly SequenceBarrier _sequenceBarrier;
+    private volatile int _running;
+
+    public TestEventProcessor(SequenceBarrier sequenceBarrier)
     {
-        private readonly ISequenceBarrier _sequenceBarrier;
-        private volatile int _running;
+        _sequenceBarrier = sequenceBarrier;
+    }
 
-        public TestEventProcessor(ISequenceBarrier sequenceBarrier)
-        {
-            _sequenceBarrier = sequenceBarrier;
-        }
+    public Sequence Sequence { get; } = new();
 
-        public ISequence Sequence { get; } = new Sequence();
-        public bool IsRunning => _running != 0;
+    public void WaitUntilStarted(TimeSpan timeout)
+    {
+        _runEvent.Wait();
+    }
 
-        public void Halt()
-        {
-            _running = 0;
-        }
+    public bool IsRunning => _running != 0;
 
-        public void Run()
-        {
-            if (Interlocked.Exchange(ref _running, 1) != 0)
-                throw new InvalidOperationException("Already running");
+    public void Halt()
+    {
+        _running = 0;
+        _runEvent.Reset();
+    }
 
-            _sequenceBarrier.WaitFor(0L);
-            Sequence.SetValue(Sequence.Value + 1);
-        }
+    public Task Start(TaskScheduler taskScheduler, TaskCreationOptions taskCreationOptions)
+    {
+        return taskScheduler.ScheduleAndStart(Run, taskCreationOptions);
+    }
+
+    public void Run()
+    {
+        if (Interlocked.Exchange(ref _running, 1) != 0)
+            throw new InvalidOperationException("Already running");
+
+        _runEvent.Set();
+        _sequenceBarrier.WaitFor(0L);
+        Sequence.SetValue(Sequence.Value + 1);
     }
 }
-

@@ -1,35 +1,51 @@
 ﻿using System;
 using System.Threading;
+using System.Threading.Tasks;
+using Disruptor.Processing;
 
-namespace Disruptor.Tests.Support
+namespace Disruptor.Tests.Support;
+
+public class DummyEventProcessor : IEventProcessor
 {
-    public class DummyEventProcessor : IEventProcessor
+    private readonly ManualResetEventSlim _runEvent = new();
+    private int _running;
+
+
+    public DummyEventProcessor()
+        : this(new Sequence())
     {
-        private int _running;
+    }
 
-        public DummyEventProcessor()
-            : this(new Sequence())
-        {
-        }
+    public DummyEventProcessor(Sequence sequence)
+    {
+        Sequence = sequence;
+    }
 
-        public DummyEventProcessor(ISequence sequence)
-        {
-            Sequence = sequence;
-        }
+    public Sequence Sequence { get; }
 
-        public ISequence Sequence { get; }
+    public void Halt()
+    {
+        Thread.VolatileWrite(ref _running, 1);
+        _runEvent.Reset();
+    }
 
-        public void Halt()
-        {
-            Thread.VolatileWrite(ref _running, 1);
-        }
+    public Task Start(TaskScheduler taskScheduler, TaskCreationOptions taskCreationOptions)
+    {
+        return taskScheduler.ScheduleAndStart(Run, taskCreationOptions);
+    }
 
-        public bool IsRunning => Thread.VolatileRead(ref _running) == 1;
+    public void WaitUntilStarted(TimeSpan timeout)
+    {
+        _runEvent.Wait();
+    }
 
-        public void Run()
-        {
-            if (Interlocked.Exchange(ref _running, 1) != 0)
-                throw new InvalidOperationException("Already running");
-        }
+    public bool IsRunning => Thread.VolatileRead(ref _running) == 1;
+
+    public void Run()
+    {
+        if (Interlocked.Exchange(ref _running, 1) != 0)
+            throw new InvalidOperationException("Already running");
+
+        _runEvent.Set();
     }
 }

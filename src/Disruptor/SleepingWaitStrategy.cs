@@ -1,69 +1,65 @@
 ﻿using System.Threading;
 
-namespace Disruptor
+namespace Disruptor;
+
+/// <summary>
+/// Non-blocking wait strategy that initially spins, then uses <c>Thread.Yield()</c>, and
+/// eventually <c>Thread.Sleep(0)</c> while the event processors
+/// are waiting on a barrier.
+/// </summary>
+/// <remarks>
+/// This strategy is a good compromise between performance and CPU resources.
+/// Latency spikes can occur after quiet periods.  It will also reduce the impact
+/// on the producing thread as it will not need signal any conditional variables
+/// to wake up the event handling thread.
+/// </remarks>
+public sealed class SleepingWaitStrategy : IWaitStrategy
 {
-    /// <summary>
-    /// Sleeping strategy that initially spins, then uses a Thread.Yield(), and
-    /// eventually sleep(<code>Thread.Sleep(0)</code>) for the minimum
-    /// number of nanos the OS and JVM will allow while the
-    /// <see cref="IEventProcessor"/>s are waiting on a barrier.
-    /// <p>
-    /// This strategy is a good compromise between performance and CPU resource.
-    /// Latency spikes can occur after quiet periods.
-    /// </p>
-    /// </summary>
-    public sealed class SleepingWaitStrategy : INonBlockingWaitStrategy
+    private const int _defaultRetries = 200;
+    private readonly int _retries;
+
+    public SleepingWaitStrategy(int retries = _defaultRetries)
     {
-        private const int _defaultRetries = 200;
-        private readonly int _retries;
+        _retries = retries;
+    }
 
-        public SleepingWaitStrategy(int retries = _defaultRetries)
+    public bool IsBlockingStrategy => false;
+
+    public SequenceWaitResult WaitFor(long sequence, DependentSequenceGroup dependentSequences, CancellationToken cancellationToken)
+    {
+        long availableSequence;
+        int counter = _retries;
+
+        while ((availableSequence = dependentSequences.Value) < sequence)
         {
-            _retries = retries;
+            counter = ApplyWaitMethod(cancellationToken, counter);
         }
 
-        /// <summary>
-        /// <see cref="IWaitStrategy.WaitFor"/>
-        /// </summary>
-        public long WaitFor(long sequence, Sequence cursor, ISequence dependentSequence, ISequenceBarrier barrier)
+        return availableSequence;
+    }
+
+    public void SignalAllWhenBlocking()
+    {
+    }
+
+    private static int ApplyWaitMethod(CancellationToken cancellationToken, int counter)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (counter > 100)
         {
-            long availableSequence;
-            int counter = _retries;
-
-            while ((availableSequence = dependentSequence.Value) < sequence)
-            {
-                counter = ApplyWaitMethod(barrier, counter);
-            }
-
-            return availableSequence;
+            --counter;
+        }
+        else if (counter > 0)
+        {
+            --counter;
+            Thread.Yield();
+        }
+        else
+        {
+            Thread.Sleep(0);
         }
 
-        /// <summary>
-        /// <see cref="IWaitStrategy.SignalAllWhenBlocking"/>
-        /// </summary>
-        public void SignalAllWhenBlocking()
-        {
-        }
-
-        private static int ApplyWaitMethod(ISequenceBarrier barrier, int counter)
-        {
-            barrier.CheckAlert();
-
-            if (counter > 100)
-            {
-                --counter;
-            }
-            else if (counter > 0)
-            {
-                --counter;
-                Thread.Yield();
-            }
-            else
-            {
-                Thread.Sleep(0);
-            }
-
-            return counter;
-        }
+        return counter;
     }
 }

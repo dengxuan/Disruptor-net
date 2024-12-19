@@ -1,38 +1,50 @@
-﻿using System.Linq;
-using System.Runtime.CompilerServices;
+﻿using System;
+using System.Linq;
 using BenchmarkDotNet.Attributes;
+using Disruptor.Benchmarks.Util;
+using Disruptor.Util;
 
-namespace Disruptor.Benchmarks
+namespace Disruptor.Benchmarks;
+
+[DisassemblyDiagnoser, ThroughputColumn]
+public class ObjectArrayBenchmarks
 {
-    public class ObjectArrayBenchmarks
+    private readonly Event[] _array;
+    private readonly int _mask;
+    private int _index;
+
+    public ObjectArrayBenchmarks()
     {
-        private readonly Event[] _array;
+        _array = Enumerable.Range(0, 64)
+                           .Select(i => new Event { Value = i })
+                           .ToArray();
 
-        public ObjectArrayBenchmarks()
-        {
-            _array = Enumerable.Range(0, 1024)
-                               .Select(i => new Event { Value = i })
-                               .ToArray();
-        }
+        _mask = _array.Length - 1;
+    }
 
-        public int Index = 371;
+    [Benchmark(Baseline = true)]
+    public Event ReadOneArray()
+    {
+        return _array[NextSequence()];
+    }
 
-        [Benchmark(Baseline = true)]
-        public int ReadOne()
-        {
-            return _array[Index].Value;
-        }
+    [Benchmark]
+    public Event ReadOneIL()
+    {
+        return InternalUtil.Read<Event>(_array, NextSequence());
+    }
 
-        [Benchmark]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public int ReadOneIL()
-        {
-            return InternalUtil.Read<Event>(_array, Index).Value;
-        }
+    [Benchmark]
+    public ReadOnlySpan<Event> ReadSpanIL()
+    {
+        var sequence = NextSequence();
+        return InternalUtil.ReadSpan<Event>(_array, sequence, sequence);
+    }
 
-        public class Event
-        {
-            public int Value { get; set; }
-        }
+    private int NextSequence() => _index++ & _mask;
+
+    public class Event
+    {
+        public int Value { get; set; }
     }
 }

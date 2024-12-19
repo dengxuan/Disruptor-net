@@ -1,20 +1,31 @@
 ﻿using System;
 
-namespace Disruptor.Tests.Support
+namespace Disruptor.Tests.Support;
+
+public class TestValueEventHandler<T> : IValueEventHandler<T>
+    where T : struct
 {
-    public class TestValueEventHandler<T> : IValueEventHandler<T>
-        where T : struct
+    public TestValueEventHandler()
+        : this(_ => { })
     {
-        private readonly Action<T> _onEventAction;
+    }
 
-        public TestValueEventHandler(Action<T> onEventAction)
-        {
-            _onEventAction = onEventAction;
-        }
+    public TestValueEventHandler(Action<T> onEventAction)
+    {
+        OnEventAction = onEventAction;
+        OnTimeoutAction = () => { };
+    }
 
-        public void OnEvent(ref T data, long sequence, bool endOfBatch)
-        {
-            _onEventAction.Invoke(data);
-        }
+    public Action<T> OnEventAction { get; set; }
+    public Action OnTimeoutAction { get; set; }
+
+    public void OnEvent(ref T data, long sequence, bool endOfBatch)
+    {
+        OnEventAction.Invoke(data);
+    }
+
+    public void OnTimeout(long sequence)
+    {
+        OnTimeoutAction.Invoke();
     }
 }
